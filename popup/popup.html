@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LMS Auto-Pilot AI</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="popup-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <div class="logo-badge">⚡</div>
+        <div>
+          <h1>LMS Auto-Pilot</h1>
+          <p class="subtitle">AI Module, Simulation & Quiz Solver</p>
+        </div>
+      </div>
+      <span class="status-pill" id="popup-status-pill">IDLE</span>
+    </header>
+
+    <!-- Quick Control Card -->
+    <section class="control-card">
+      <div class="stats-row">
+        <div class="stat-box">
+          <span class="stat-num" id="stat-pages">0</span>
+          <span class="stat-label">Modul</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-num" id="stat-sims">0</span>
+          <span class="stat-label">Simulasi</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-num" id="stat-mcqs">0</span>
+          <span class="stat-label">Pil. Ganda</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-num" id="stat-essays">0</span>
+          <span class="stat-label">Esai</span>
+        </div>
+      </div>
+
+      <div class="action-buttons">
+        <button class="btn btn-start" id="btn-popup-autopilot">
+          ▶ Jalankan Full Auto-Pilot
+        </button>
+        <button class="btn btn-single" id="btn-popup-single" title="Selesaikan halaman aktif saja">
+          ⚡ 1 Halaman
+        </button>
+      </div>
+    </section>
+
+    <!-- Navigation Tabs -->
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="tab-ai">🤖 Konfigurasi AI</button>
+      <button class="tab-btn" data-tab="tab-behavior">⚙️ Eksekusi</button>
+      <button class="tab-btn" data-tab="tab-selectors">🎯 Selector</button>
+    </nav>
+
+    <!-- Tab 1: AI Configuration -->
+    <div class="tab-panel active" id="tab-ai">
+      <div class="form-group">
+        <label for="ai-provider">Provider AI</label>
+        <select id="ai-provider">
+          <option value="gemini">Google Gemini API (Direkomendasikan)</option>
+          <option value="openai">OpenAI API (GPT-4o / Mini)</option>
+          <option value="groq">Groq Cloud API (Llama 3.3 Cepat)</option>
+          <option value="custom">Custom OpenAI-Compatible Endpoint</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="ai-model">Model AI</label>
+        <input type="text" id="ai-model" placeholder="gemini-2.5-flash" />
+        <small class="hint" id="model-hint">Contoh: gemini-2.5-flash, gemini-2.0-flash, gpt-4o-mini</small>
+      </div>
+
+      <div class="form-group" id="custom-endpoint-group" style="display: none;">
+        <label for="custom-endpoint">Endpoint URL (Chat Completions)</label>
+        <input type="url" id="custom-endpoint" placeholder="https://api.openai.com/v1/chat/completions" />
+      </div>
+
+      <div class="form-group">
+        <label for="api-key">API Key</label>
+        <div class="input-with-btn">
+          <input type="password" id="api-key" placeholder="Masukkan API Key Anda..." />
+          <button type="button" class="btn-icon" id="btn-toggle-key" title="Tampilkan/Sembunyikan">👁️</button>
+        </div>
+        <small class="hint">Kosongkan jika ingin menggunakan Smart Contextual Heuristic lokal.</small>
+      </div>
+
+      <div class="form-check">
+        <input type="checkbox" id="use-smart-fallback" checked />
+        <label for="use-smart-fallback">Gunakan Smart Fallback jika API Key kosong / limit</label>
+      </div>
+
+      <div class="btn-row">
+        <button type="button" class="btn btn-outline" id="btn-test-api">🔌 Test Koneksi AI</button>
+      </div>
+      <div class="feedback-msg" id="api-test-feedback"></div>
+    </div>
+
+    <!-- Tab 2: Execution & Behavior -->
+    <div class="tab-panel" id="tab-behavior">
+      <div class="grid-2">
+        <div class="form-group">
+          <label for="action-delay">Jeda Antar Klik (ms)</label>
+          <input type="number" id="action-delay" min="100" max="10000" step="50" value="650" />
+        </div>
+        <div class="form-group">
+          <label for="program-wait">Tunggu Program (ms)</label>
+          <input type="number" id="program-wait" min="300" max="15000" step="100" value="1800" />
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="form-group">
+          <label for="essay-language">Bahasa Jawaban Esai</label>
+          <select id="essay-language">
+            <option value="id">Bahasa Indonesia</option>
+            <option value="en">English</option>
+            <option value="auto">Sesuai Bahasa Soal</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="essay-length">Panjang Esai</label>
+          <select id="essay-length">
+            <option value="short">Singkat & Padat (1-2 kalimat)</option>
+            <option value="medium" selected>Standar Akademis (3-4 kalimat)</option>
+            <option value="detailed">Detail & Lengkap (1-2 paragraf)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-check">
+        <input type="checkbox" id="auto-submit" checked />
+        <label for="auto-submit">Otomatis klik tombol Submit / Periksa Jawaban</label>
+      </div>
+
+      <div class="form-check">
+        <input type="checkbox" id="auto-next-module" checked />
+        <label for="auto-next-module">Otomatis pindah ke Modul Selanjutnya (Full Auto-Pilot)</label>
+      </div>
+
+      <div class="form-check">
+        <input type="checkbox" id="simulate-typing" checked />
+        <label for="simulate-typing">Simulasikan efek pengetikan natural pada Esai</label>
+      </div>
+
+      <div class="form-check">
+        <input type="checkbox" id="show-floating-hud" checked />
+        <label for="show-floating-hud">Tampilkan panel melayang (Floating HUD) di halaman LMS</label>
+      </div>
+    </div>
+
+    <!-- Tab 3: Custom CSS Selectors -->
+    <div class="tab-panel" id="tab-selectors">
+      <p class="tab-note">
+        Opsional: Isi hanya jika LMS Anda menggunakan elemen khusus yang tidak terdeteksi otomatis.
+      </p>
+      <div class="form-group">
+        <label for="sel-sim-buttons">Selector Tombol Langkah Simulasi</label>
+        <input type="text" id="sel-sim-buttons" placeholder="Contoh: .sim-step-btn, [data-step]" />
+      </div>
+      <div class="form-group">
+        <label for="sel-run-button">Selector Tombol Jalankan Program (Run)</label>
+        <input type="text" id="sel-run-button" placeholder="Contoh: #btn-run-code, .execute-btn" />
+      </div>
+      <div class="form-group">
+        <label for="sel-mcq">Selector Kontainer Pilihan Ganda</label>
+        <input type="text" id="sel-mcq" placeholder="Contoh: .custom-quiz-box" />
+      </div>
+      <div class="form-group">
+        <label for="sel-essay">Selector Input Esai</label>
+        <input type="text" id="sel-essay" placeholder="Contoh: .essay-textarea" />
+      </div>
+      <div class="grid-2">
+        <div class="form-group">
+          <label for="sel-submit">Tombol Submit</label>
+          <input type="text" id="sel-submit" placeholder="#submit-quiz" />
+        </div>
+        <div class="form-group">
+          <label for="sel-next">Tombol Next Modul</label>
+          <input type="text" id="sel-next" placeholder=".btn-next-lesson" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer Save -->
+    <footer class="footer">
+      <button type="button" class="btn-link" id="btn-reset-stats">Reset Statistik</button>
+      <button type="button" class="btn btn-save" id="btn-save-config">💾 Simpan Pengaturan</button>
+    </footer>
+  </div>
+
+  <script src="../utils/storage.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

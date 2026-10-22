@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LMS Simulasi Pembelajaran — Modul Otomasi & Pemrograman</title>
+  <style>
+    :root {
+      --bg: #f1f5f9;
+      --card: #ffffff;
+      --text: #0f172a;
+      --muted: #475569;
+      --border: #e2e8f0;
+      --primary: #2563eb;
+      --success: #059669;
+      --warn: #d97706;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding-bottom: 90px;
+    }
+    header.lms-topbar {
+      background: #0f172a;
+      color: #fff;
+      padding: 14px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+    .course-title {
+      font-weight: 700;
+      font-size: 16px;
+    }
+    .module-badge {
+      background: rgba(59, 130, 246, 0.25);
+      color: #93c5fd;
+      padding: 5px 12px;
+      border-radius: 999px;
+      font-size: 12.5px;
+      font-weight: 600;
+    }
+    main {
+      max-width: 880px;
+      margin: 28px auto;
+      padding: 0 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 22px 24px;
+      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+    }
+    h1, h2, h3 {
+      margin-top: 0;
+      color: #0f172a;
+    }
+    .reading-material {
+      background: #f8fafc;
+      border-left: 4px solid var(--primary);
+      padding: 14px 18px;
+      border-radius: 0 10px 10px 0;
+      color: #1e293b;
+      font-size: 14.5px;
+    }
+    .simulation-container {
+      border: 2px solid #cbd5e1;
+      border-radius: 12px;
+      padding: 18px;
+      background: #f8fafc;
+    }
+    .sim-instruction {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      color: #1e3a8a;
+      padding: 12px 14px;
+      border-radius: 8px;
+      margin-bottom: 14px;
+      font-size: 14px;
+    }
+    .sim-buttons-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .sim-btn {
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: 1.5px solid #94a3b8;
+      background: #ffffff;
+      color: #1e293b;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .sim-btn.active {
+      background: #dbeafe;
+      border-color: #2563eb;
+      color: #1d4ed8;
+    }
+    .sim-controls-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-top: 1px solid #e2e8f0;
+      padding-top: 14px;
+      margin-top: 8px;
+    }
+    .run-program-btn {
+      background: #059669;
+      color: #ffffff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 18px;
+      font-weight: 700;
+      font-size: 13.5px;
+      cursor: pointer;
+    }
+    .sim-output {
+      margin-top: 14px;
+      background: #0f172a;
+      color: #38bdf8;
+      padding: 12px 14px;
+      border-radius: 8px;
+      font-family: ui-monospace, monospace;
+      font-size: 12.5px;
+      min-height: 46px;
+    }
+    .question-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    .question-text {
+      font-weight: 600;
+      margin-bottom: 10px;
+      font-size: 14.5px;
+    }
+    .options-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .options-list label {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 9px 12px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .options-list label:hover {
+      background: #f8fafc;
+    }
+    textarea {
+      width: 100%;
+      min-height: 110px;
+      padding: 12px;
+      border: 1.5px solid #cbd5e1;
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+    .nav-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 10px;
+    }
+    .btn-submit {
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      padding: 11px 20px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .btn-next {
+      background: #0f172a;
+      color: #fff;
+      border: none;
+      padding: 11px 20px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .btn-next:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    .submit-badge {
+      display: inline-block;
+      margin-top: 10px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      background: #dcfce7;
+      color: #166534;
+    }
+  </style>
+</head>
+<body>
+  <header class="lms-topbar">
+    <div class="course-title">🎓 Akademi Teknik — LMS Modul Interaktif</div>
+    <div class="module-badge" id="module-indicator">Modul 1 dari 2</div>
+  </header>
+
+  <main id="module-root"></main>
+
+  <script>
+    const MODULES = [
+      {
+        id: 1,
+        title: 'Modul 1: Akuisisi Sensor & Eksekusi Program Telemetri',
+        reading: `Pada sistem akuisisi data telemetri industri, pipeline perangkat lunak harus dijalankan secara berurutan.
+Tahap pertama adalah melakukan Inisialisasi Sensor untuk membuka komunikasi port serial.
+Tahap kedua adalah menjalankan Kalibrasi Data agar titik nol (zero-offset) tervalidasi dengan akurat.
+Tahap ketiga adalah mengaktifkan Aktifkan Filter Noise menggunakan algoritma Low-Pass Filter untuk meredam interferensi sinyal frekuensi tinggi.
+Protokol komunikasi yang digunakan untuk pengiriman telemetri ringan berdaya rendah adalah MQTT (Message Queuing Telemetry Transport).`,
+        simulation: {
+          instruction: 'TUGAS SIMULASI: Tekan tombol langkah konfigurasi secara berurutan: (1) Inisialisasi Sensor, (2) Kalibrasi Data, dan (3) Aktifkan Filter Noise. Setelah ketiga tombol aktif, klik tombol Jalankan Program.',
+          expectedOrder: ['Inisialisasi Sensor', 'Kalibrasi Data', 'Aktifkan Filter Noise'],
+          buttons: [
+            'Kalibrasi Data',
+            'Inisialisasi Sensor',
+            'Matikan Daya Paksa',
+            'Aktifkan Filter Noise',
+            'Reset Konfigurasi'
+          ]
+        },
+        mcqs: [
+          {
+            name: 'm1_q1',
+            question: '1. Algoritma apa yang digunakan pada tahap Aktifkan Filter Noise untuk meredam interferensi sinyal frekuensi tinggi?',
+            options: [
+              'High-Boost Amplifier',
+              'Low-Pass Filter',
+              'Random Packet Dropper',
+              'Unfiltered Raw Stream'
+            ],
+            correct: 'Low-Pass Filter'
+          },
+          {
+            name: 'm1_q2',
+            question: '2. Protokol komunikasi apa yang digunakan untuk pengiriman telemetri ringan berdaya rendah pada materi di atas?',
+            options: [
+              'FTP (File Transfer Protocol)',
+              'SMTP Mail Relay',
+              'MQTT (Message Queuing Telemetry Transport)',
+              'Telnet Unsecured'
+            ],
+            correct: 'MQTT (Message Queuing Telemetry Transport)'
+          }
+        ],
+        essayPrompt: 'Jelaskan mengapa tahapan Inisialisasi Sensor, Kalibrasi Data, dan Aktifkan Filter Noise harus dilakukan secara berurutan sebelum program telemetri dijalankan!'
+      },
+      {
+        id: 2,
+        title: 'Modul 2: Otomasi Pipeline Deployment & Keamanan API',
+        reading: `Dalam proses deployment layanan mikro (microservices), pipeline eksekusi otomatis harus mengamankan jalur komunikasi terlebih dahulu.
+Langkah pertama adalah menjalankan Validasi Skema Input untuk mencegah injeksi payload berbahaya.
+Langkah kedua adalah mengaktifkan Enkripsi Payload TLS agar seluruh paket data terlindungi secara kriptografis.
+Langkah ketiga adalah menekan Buka Koneksi Gateway untuk meneruskan trafik ke server produksi.
+Autentikasi antar layanan menggunakan standar token JSON Web Token (JWT) dengan tanda tangan digital.`,
+        simulation: {
+          instruction: 'TUGAS SIMULASI: Aktifkan urutan keamanan berikut secara tepat: (1) Validasi Skema Input, (2) Enkripsi Payload TLS, kemudian (3) Buka Koneksi Gateway. Setelah itu tekan tombol Jalankan Program.',
+          expectedOrder: ['Validasi Skema Input', 'Enkripsi Payload TLS', 'Buka Koneksi Gateway'],
+          buttons: [
+            'Enkripsi Payload TLS',
+            'Bypass Firewall',
+            'Validasi Skema Input',
+            'Buka Koneksi Gateway',
+            'Reset Pipeline'
+          ]
+        },
+        mcqs: [
+          {
+            name: 'm2_q1',
+            question: '1. Standar token apa yang digunakan untuk autentikasi antar layanan mikro pada modul ini?',
+            options: [
+              'Plaintext Cookie',
+              'JSON Web Token (JWT)',
+              'Anonymous Session',
+              'Static HTML Header'
+            ],
+            correct: 'JSON Web Token (JWT)'
+          }
+        ],
+        essayPrompt: 'Bagaimana peran Validasi Skema Input dan Enkripsi Payload TLS dalam menjaga keamanan pipeline deployment layanan mikro?'
+      }
+    ];
+
+    let currentModuleIdx = 0;
+    let selectedSequence = [];
+    let simCompleted = false;
+
+    function renderCurrentModule() {
+      selectedSequence = [];
+      simCompleted = false;
+      const root = document.getElementById('module-root');
+      const indicator = document.getElementById('module-indicator');
+
+      if (currentModuleIdx >= MODULES.length) {
+        indicator.textContent = 'Selesai (100%)';
+        root.innerHTML = `
+          <div class="card" style="text-align:center; padding: 48px 24px;">
+            <h1 style="color:#059669;">🎉 Selamat! Seluruh Modul Telah Selesai!</h1>
+            <p>Semua simulasi program, soal pilihan ganda, dan esai telah berhasil diselesaikan dengan sempurna oleh LMS Auto-Pilot.</p>
+          </div>
+        `;
+        return;
+      }
+
+      const mod = MODULES[currentModuleIdx];
+      indicator.textContent = `Modul ${currentModuleIdx + 1} dari ${MODULES.length}`;
+
+      root.innerHTML = `
+        <section class="card">
+          <h1>${mod.title}</h1>
+          <div class="reading-material">${mod.reading}</div>
+        </section>
+
+        <section class="card">
+          <h2>🛠️ Praktikum Simulasi & Eksekusi Program</h2>
+          <div class="simulation-container" data-simulation="true" id="sim-container">
+            <div class="sim-instruction">${mod.simulation.instruction}</div>
+            <div class="sim-buttons-grid" id="sim-buttons">
+              ${mod.simulation.buttons
+                .map(
+                  (label) =>
+                    `<button type="button" class="sim-btn" data-label="${label}">${label}</button>`
+                )
+                .join('')}
+            </div>
+            <div class="sim-controls-bar">
+              <span id="seq-display" style="font-size:13px; color:#475569;">Urutan dipilih: (belum ada)</span>
+              <button type="button" class="run-program-btn" id="btn-run-program" data-run-program="true">
+                ⚙️ Jalankan Program
+              </button>
+            </div>
+            <div class="sim-output" id="sim-output">[READY] Menunggu konfigurasi tombol dan eksekusi program...</div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>📝 Kuis Pilihan Ganda</h2>
+          ${mod.mcqs
+            .map(
+              (q) => `
+            <div class="question-card">
+              <div class="question-text">${q.question}</div>
+              <div class="options-list">
+                ${q.options
+                  .map(
+                    (opt) => `
+                  <label>
+                    <input type="radio" name="${q.name}" value="${opt}" />
+                    <span>${opt}</span>
+                  </label>
+                `
+                  )
+                  .join('')}
+              </div>
+            </div>
+          `
+            )
+            .join('')}
+        </section>
+
+        <section class="card">
+          <h2>✍️ Tugas Esai Analitis</h2>
+          <div class="question-card">
+            <label class="question-text" for="essay-input">${mod.essayPrompt}</label>
+            <textarea id="essay-input" placeholder="Tuliskan jawaban analisis Anda di sini..."></textarea>
+          </div>
+          <div id="submit-feedback"></div>
+          <div class="nav-footer">
+            <button type="button" class="btn-submit" id="btn-submit-module">Kirim Jawaban</button>
+            <button type="button" class="btn-next" id="btn-next-module">Modul Selanjutnya →</button>
+          </div>
+        </section>
+      `;
+
+      // Event listener tombol langkah simulasi
+      root.querySelectorAll('.sim-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const label = btn.getAttribute('data-label');
+          if (/reset/i.test(label)) {
+            selectedSequence = [];
+            root.querySelectorAll('.sim-btn').forEach((b) => b.classList.remove('active'));
+            document.getElementById('seq-display').textContent = 'Urutan dipilih: (direset)';
+            return;
+          }
+          if (!selectedSequence.includes(label)) {
+            selectedSequence.push(label);
+            btn.classList.add('active');
+            document.getElementById('seq-display').textContent =
+              'Urutan dipilih: ' + selectedSequence.join(' → ');
+          }
+        });
+      });
+
+      // Event listener tombol Jalankan Program
+      document.getElementById('btn-run-program').addEventListener('click', () => {
+        const out = document.getElementById('sim-output');
+        out.textContent = '[RUNNING] Mengeksekusi program dengan konfigurasi...';
+        setTimeout(() => {
+          const expected = mod.simulation.expectedOrder;
+          const isMatch =
+            selectedSequence.length === expected.length &&
+            expected.every((val, i) => selectedSequence[i] === val);
+
+          if (isMatch) {
+            simCompleted = true;
+            document.getElementById('sim-container').setAttribute('data-completed', 'true');
+            out.style.color = '#34d399';
+            out.textContent = `[BERHASIL] Program berhasil dijalankan! Urutan valid: ${selectedSequence.join(' -> ')}. Status: PASSED 100%`;
+          } else {
+            out.style.color = '#f87171';
+            out.textContent = `[ERROR] Urutan langkah belum tepat (${selectedSequence.join(', ') || 'kosong'}). Harus: ${expected.join(' -> ')}`;
+          }
+        }, 450);
+      });
+
+      // Event listener tombol Kirim Jawaban
+      document.getElementById('btn-submit-module').addEventListener('click', () => {
+        const essayVal = document.getElementById('essay-input').value.trim();
+        const fb = document.getElementById('submit-feedback');
+        fb.innerHTML = `<div class="submit-badge">✓ Jawaban Modul ${mod.id} berhasil diverifikasi! (Simulasi: ${simCompleted ? 'BERHASIL' : 'BELUM'}, Esai: ${essayVal.length} karakter)</div>`;
+      });
+
+      // Event listener tombol Modul Selanjutnya
+      document.getElementById('btn-next-module').addEventListener('click', () => {
+        currentModuleIdx++;
+        renderCurrentModule();
+      });
+    }
+
+    renderCurrentModule();
+  </script>
+
+  <!-- Muat skrip ekstensi secara langsung jika dibuka sebagai halaman tes mandiri -->
+  <script src="../utils/storage.js"></script>
+  <script src="../background/ai-client.js"></script>
+  <script src="../content/scanner.js"></script>
+  <script src="../content/executor.js"></script>
+  <script src="../content/hud.js"></script>
+  <script src="../content/autopilot.js"></script>
+</body>
+</html>
