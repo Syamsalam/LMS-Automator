@@ -16,6 +16,7 @@ const LMSHud = {
   },
 
   init(callbacks = {}) {
+    if (window !== window.top) return;
     if (document.getElementById('lms-autopilot-hud-host')) return;
 
     this.callbacks = callbacks;

@@ -217,6 +217,171 @@
       background: #dcfce7;
       color: #166534;
     }
+    /* Gaya khusus Widget Code-Builder Python (seperti pada LMS Data Science) */
+    .py-widget-wrap {
+      padding: 16px 8px;
+    }
+    .py-cell-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    .py-cell-idx {
+      font-family: ui-monospace, monospace;
+      color: #64748b;
+      font-size: 15px;
+      padding-top: 8px;
+      user-select: none;
+    }
+    .py-editor-box {
+      flex: 1;
+      background: #050505;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+    }
+    .py-editor-header {
+      background: #33344a;
+      color: #e2e8f0;
+      padding: 7px 14px;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .py-editor-body {
+      display: flex;
+      position: relative;
+      min-height: 135px;
+    }
+    .py-gutter {
+      background: #22261e;
+      color: #94a3b8;
+      padding: 10px 12px;
+      font-family: ui-monospace, monospace;
+      font-size: 13px;
+      line-height: 1.65;
+      text-align: right;
+      user-select: none;
+    }
+    .py-code-lines {
+      flex: 1;
+      padding: 10px 14px;
+      font-family: ui-monospace, monospace;
+      font-size: 13.5px;
+      line-height: 1.65;
+      color: #f8fafc;
+      white-space: pre-wrap;
+    }
+    .py-run-pill {
+      position: absolute;
+      right: 12px;
+      bottom: 10px;
+      background: #0b7a0b;
+      color: #052e05;
+      background: linear-gradient(180deg, #15803d, #166534);
+      color: #e2fbe8;
+      padding: 6px 18px;
+      border-radius: 10px;
+      font-family: ui-monospace, monospace;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      user-select: none;
+    }
+    .py-tiles-pool {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 12px;
+      margin-top: 22px;
+      padding: 0 24px;
+    }
+    .py-tile {
+      background: #e0f2fe;
+      border: 1px solid #bae6fd;
+      border-bottom: 3px solid #93c5fd;
+      border-radius: 12px;
+      padding: 10px 18px;
+      font-family: ui-monospace, monospace;
+      font-size: 14px;
+      color: #0f172a;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      transition: transform 0.12s, opacity 0.15s;
+    }
+    .py-tile.used {
+      opacity: 0.38;
+    }
+    .py-slot-box {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 18px;
+      height: 22px;
+      padding: 0 6px;
+      background: #8e969d;
+      color: #0f172a;
+      border-radius: 5px;
+      vertical-align: middle;
+      cursor: pointer;
+      position: relative;
+      font-weight: 700;
+      font-size: 13px;
+    }
+    .py-slot-box.filled {
+      background: #38bdf8;
+      color: #0f172a;
+    }
+    .lms-balloon-popover {
+      display: inline-flex;
+      gap: 8px;
+      background: #dce0ec;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      padding: 8px 12px;
+      margin-top: 8px;
+      box-shadow: 0 6px 16px rgba(15, 23, 42, 0.14);
+    }
+    .lms-balloon-opt {
+      background: #ffffff;
+      color: #0f172a;
+      border: 1px solid #e2e8f0;
+      border-radius: 7px;
+      padding: 5px 12px;
+      font-size: 14px;
+      font-family: inherit;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .lms-balloon-opt:hover {
+      background: #eff6ff;
+      border-color: #60a5fa;
+    }
+    .post-run-sentence {
+      margin-top: 20px;
+      font-size: 16px;
+      color: #0f172a;
+    }
+    .inline-blank-btn {
+      display: inline-block;
+      border: 1.5px solid #cbd5e1;
+      border-radius: 8px;
+      padding: 2px 8px;
+      background: #ffffff;
+      color: #334155;
+      font-family: ui-monospace, monospace;
+      font-size: 15px;
+      cursor: pointer;
+    }
+    .inline-blank-btn.filled {
+      background: #dcfce7;
+      border-color: #22c55e;
+      color: #166534;
+      font-weight: 700;
+    }
   </style>
 </head>
 <body>
@@ -307,6 +472,26 @@ Autentikasi antar layanan menggunakan standar token JSON Web Token (JWT) dengan 
           }
         ],
         essayPrompt: 'Bagaimana peran Validasi Skema Input dan Enkripsi Payload TLS dalam menjaga keamanan pipeline deployment layanan mikro?'
+      },
+      {
+        id: 3,
+        type: 'python-code-builder',
+        title: 'Modul 3: Analisis Data Pandas & Eksekusi Notebook Python',
+        reading: `Untuk menganalisis dataset penggunaan internet menggunakan Python, kita mengimpor pustaka pandas sebagai pd dan matplotlib.pyplot sebagai plt. Selanjutnya kita membaca berkas 'internet.csv' menggunakan fungsi pd.read_csv('internet.csv') ke dalam variabel internet, lalu menampilkan isi dataframe internet pada baris terakhir sel kode.`,
+        mcqs: [
+          {
+            name: 'm3_q1',
+            question: '1. Fungsi pandas apa yang digunakan untuk membaca berkas CSV ke dalam sebuah DataFrame?',
+            options: [
+              'pd.read_csv()',
+              'plt.show_table()',
+              'pd.open_text()',
+              'os.remove_csv()'
+            ],
+            correct: 'pd.read_csv()'
+          }
+        ],
+        essayPrompt: 'Jelaskan langkah-langkah membaca dataset CSV menggunakan pustaka pandas dan menampilkan dataframe pada Python!'
       }
     ];
 
@@ -326,20 +511,67 @@ Autentikasi antar layanan menggunakan standar token JSON Web Token (JWT) dengan 
           <div class="card" style="text-align:center; padding: 48px 24px;">
             <h1 style="color:#059669;">🎉 Selamat! Seluruh Modul Telah Selesai!</h1>
             <p>Semua simulasi program, soal pilihan ganda, dan esai telah berhasil diselesaikan dengan sempurna oleh LMS Auto-Pilot.</p>
+            <button type="button" class="btn-submit" id="btn-restart-course" style="margin-top:14px;">🔄 Ulangi dari Modul 1</button>
           </div>
         `;
+        document.getElementById('btn-restart-course').addEventListener('click', () => {
+          currentModuleIdx = 0;
+          renderCurrentModule();
+          if (window.LMSAutoPilot) {
+            window.LMSAutoPilot.performScanOnly();
+          }
+        });
         return;
       }
 
       const mod = MODULES[currentModuleIdx];
       indicator.textContent = `Modul ${currentModuleIdx + 1} dari ${MODULES.length}`;
 
-      root.innerHTML = `
+      const simSectionHtml =
+        mod.type === 'python-code-builder'
+          ? `
         <section class="card">
-          <h1>${mod.title}</h1>
-          <div class="reading-material">${mod.reading}</div>
-        </section>
+          <h2>🐍 Latihan Kode Interaktif (Python Notebook Cell)</h2>
+          <div class="py-widget-wrap" id="py-builder-widget">
+            <div class="py-cell-row">
+              <div class="py-cell-idx">[1]</div>
+              <div class="py-editor-box">
+                <div class="py-editor-header">
+                  <span>python</span>
+                  <span>≡</span>
+                </div>
+                <div class="py-editor-body">
+                  <div class="py-gutter">1<br/>2<br/>3<br/>4<br/>5</div>
+                  <div class="py-code-lines" id="py-editor-lines"></div>
+                  <div class="py-run-pill" id="py-run-btn">▶ run</div>
+                </div>
+              </div>
+            </div>
 
+            <div id="py-slot-popover-area" style="min-height:10px; text-align:center;"></div>
+
+            <div class="py-tiles-pool" id="py-tiles-pool">
+              <div class="py-tile" data-tile-key="pandas">import pandas as pd</div>
+              <div class="py-tile" data-tile-key="display"><span class="py-slot-box" data-slot-id="disp_var" data-options="internet|plt|pd"></span> #display the dataframe</div>
+              <div class="py-tile" data-tile-key="plt">import matplotlib.pyplot as plt</div>
+              <div class="py-tile" data-tile-key="read_csv">internet = <span class="py-slot-box" data-slot-id="csv_lib" data-options="pd|plt"></span>.read_csv( <span class="py-slot-box" data-slot-id="csv_file" data-options="'internet.csv'|'users.csv'"></span> )</div>
+            </div>
+
+            <div class="sim-output" id="sim-output" style="margin-top:16px;">[READY] Pilih setiap blok program, pilih isian di dalam blok program, lalu klik ▶ run</div>
+
+            <div class="post-run-sentence" id="post-run-area">
+              <div>
+                There are <span class="inline-blank-btn" id="rows-blank-trigger" data-inline-blank="true">[...]</span> rows of data...
+              </div>
+              <div class="lms-balloon-popover" id="rows-balloon" data-popover="true">
+                <button type="button" class="lms-balloon-opt" data-val="2">2</button>
+                <button type="button" class="lms-balloon-opt" data-val="34">34</button>
+                <button type="button" class="lms-balloon-opt" data-val="35">35</button>
+              </div>
+            </div>
+          </div>
+        </section>`
+          : `
         <section class="card">
           <h2>🛠️ Praktikum Simulasi & Eksekusi Program</h2>
           <div class="simulation-container" data-simulation="true" id="sim-container">
@@ -360,7 +592,15 @@ Autentikasi antar layanan menggunakan standar token JSON Web Token (JWT) dengan 
             </div>
             <div class="sim-output" id="sim-output">[READY] Menunggu konfigurasi tombol dan eksekusi program...</div>
           </div>
+        </section>`;
+
+      root.innerHTML = `
+        <section class="card">
+          <h1>${mod.title}</h1>
+          <div class="reading-material">${mod.reading}</div>
         </section>
+
+        ${simSectionHtml}
 
         <section class="card">
           <h2>📝 Kuis Pilihan Ganda</h2>
@@ -401,46 +641,154 @@ Autentikasi antar layanan menggunakan standar token JSON Web Token (JWT) dengan 
         </section>
       `;
 
-      // Event listener tombol langkah simulasi
-      root.querySelectorAll('.sim-btn').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const label = btn.getAttribute('data-label');
-          if (/reset/i.test(label)) {
-            selectedSequence = [];
-            root.querySelectorAll('.sim-btn').forEach((b) => b.classList.remove('active'));
-            document.getElementById('seq-display').textContent = 'Urutan dipilih: (direset)';
+      if (mod.type === 'python-code-builder') {
+        const editorLinesEl = document.getElementById('py-editor-lines');
+        const slotPopoverArea = document.getElementById('py-slot-popover-area');
+        let postRunBlankAnswer = '';
+
+        const openSlotPopover = (slotEl) => {
+          const opts = (slotEl.getAttribute('data-options') || '').split('|').filter(Boolean);
+          if (opts.length === 0) return;
+          slotPopoverArea.innerHTML = `
+            <div class="lms-balloon-popover" data-popover="true">
+              ${opts.map((o) => `<button type="button" class="lms-balloon-opt" data-slot-choice="${o}">${o}</button>`).join('')}
+            </div>
+          `;
+          slotPopoverArea.querySelectorAll('.lms-balloon-opt').forEach((btn) => {
+            btn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              const chosenVal = btn.getAttribute('data-slot-choice');
+              slotEl.textContent = chosenVal;
+              slotEl.classList.add('filled');
+              slotEl.setAttribute('data-filled', 'true');
+              slotPopoverArea.innerHTML = '';
+
+              // Jika masih ada slot kosong berikutnya di dalam editor, buka otomatis atau tunggu diklik
+              const nextUnfilled = editorLinesEl.querySelector('.py-slot-box:not(.filled)');
+              if (nextUnfilled) {
+                openSlotPopover(nextUnfilled);
+              }
+            });
+          });
+        };
+
+        root.querySelectorAll('.py-tile').forEach((tile) => {
+          tile.addEventListener('click', () => {
+            if (tile.classList.contains('used')) return;
+            tile.classList.add('used');
+
+            const lineDiv = document.createElement('div');
+            lineDiv.innerHTML = tile.innerHTML;
+            editorLinesEl.appendChild(lineDiv);
+
+            // Pasang event listener klik pada setiap kotak slot [▪] di dalam baris kode yang masuk ke editor
+            lineDiv.querySelectorAll('.py-slot-box').forEach((slotEl) => {
+              slotEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openSlotPopover(slotEl);
+              });
+            });
+
+            // Jika baris yang baru dimasukkan punya slot [▪], tampilkan pilihan untuk slot pertamanya
+            const firstSlot = lineDiv.querySelector('.py-slot-box:not(.filled)');
+            if (firstSlot) {
+              openSlotPopover(firstSlot);
+            }
+          });
+        });
+
+        // Event listener untuk pilihan hasil program "There are [...] rows of data..."
+        const rowsTrigger = document.getElementById('rows-blank-trigger');
+        const rowsBalloon = document.getElementById('rows-balloon');
+        rowsTrigger.addEventListener('click', () => {
+          rowsBalloon.style.display = 'inline-flex';
+        });
+        rowsBalloon.querySelectorAll('.lms-balloon-opt').forEach((optBtn) => {
+          optBtn.addEventListener('click', () => {
+            postRunBlankAnswer = optBtn.getAttribute('data-val');
+            rowsTrigger.textContent = postRunBlankAnswer;
+            rowsTrigger.classList.add('filled');
+            rowsTrigger.setAttribute('data-filled', 'true');
+            rowsBalloon.style.display = 'none';
+          });
+        });
+
+        document.getElementById('py-run-btn').addEventListener('click', () => {
+          const out = document.getElementById('sim-output');
+          const unfilledInEditor = editorLinesEl.querySelectorAll('.py-slot-box:not(.filled)');
+          if (unfilledInEditor.length > 0) {
+            out.style.color = '#f87171';
+            out.textContent = `[ERROR] Masih ada ${unfilledInEditor.length} pilihan di dalam blok program yang belum diisi!`;
             return;
           }
-          if (!selectedSequence.includes(label)) {
-            selectedSequence.push(label);
-            btn.classList.add('active');
-            document.getElementById('seq-display').textContent =
-              'Urutan dipilih: ' + selectedSequence.join(' → ');
-          }
+
+          const lines = Array.from(editorLinesEl.children).map((el) => el.innerText.replace(/\s+/g, ' ').trim());
+          out.textContent = '[RUNNING] Menjalankan kernel Python [1]...';
+          setTimeout(() => {
+            const validFirstTwo =
+              lines.slice(0, 2).includes('import pandas as pd') &&
+              lines.slice(0, 2).includes('import matplotlib.pyplot as plt');
+            const validThird = lines[2] === "internet = pd.read_csv( 'internet.csv' )" || lines[2] === "internet = pd.read_csv('internet.csv')";
+            const validFourth = lines[3] === 'internet #display the dataframe';
+
+            if (lines.length === 4 && validFirstTwo && validThird && validFourth) {
+              simCompleted = true;
+              document.getElementById('py-builder-widget').setAttribute('data-completed', 'true');
+              out.style.color = '#34d399';
+              out.innerHTML = `[BERHASIL] Output DataFrame internet:
+0   1990   0.05
+1   1991   0.12
+...
+34  2024  94.80
+[35 rows x 2 columns] — Status: PASSED 100%`;
+            } else {
+              out.style.color = '#f87171';
+              out.textContent = `[ERROR] Urutan atau isian blok kode belum tepat: ${lines.join(' | ') || '(kosong)'}`;
+            }
+          }, 350);
         });
-      });
+      } else {
+        // Event listener tombol langkah simulasi
+        root.querySelectorAll('.sim-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const label = btn.getAttribute('data-label');
+            if (/reset/i.test(label)) {
+              selectedSequence = [];
+              root.querySelectorAll('.sim-btn').forEach((b) => b.classList.remove('active'));
+              document.getElementById('seq-display').textContent = 'Urutan dipilih: (direset)';
+              return;
+            }
+            if (!selectedSequence.includes(label)) {
+              selectedSequence.push(label);
+              btn.classList.add('active');
+              document.getElementById('seq-display').textContent =
+                'Urutan dipilih: ' + selectedSequence.join(' → ');
+            }
+          });
+        });
 
-      // Event listener tombol Jalankan Program
-      document.getElementById('btn-run-program').addEventListener('click', () => {
-        const out = document.getElementById('sim-output');
-        out.textContent = '[RUNNING] Mengeksekusi program dengan konfigurasi...';
-        setTimeout(() => {
-          const expected = mod.simulation.expectedOrder;
-          const isMatch =
-            selectedSequence.length === expected.length &&
-            expected.every((val, i) => selectedSequence[i] === val);
+        // Event listener tombol Jalankan Program
+        document.getElementById('btn-run-program').addEventListener('click', () => {
+          const out = document.getElementById('sim-output');
+          out.textContent = '[RUNNING] Mengeksekusi program dengan konfigurasi...';
+          setTimeout(() => {
+            const expected = mod.simulation.expectedOrder;
+            const isMatch =
+              selectedSequence.length === expected.length &&
+              expected.every((val, i) => selectedSequence[i] === val);
 
-          if (isMatch) {
-            simCompleted = true;
-            document.getElementById('sim-container').setAttribute('data-completed', 'true');
-            out.style.color = '#34d399';
-            out.textContent = `[BERHASIL] Program berhasil dijalankan! Urutan valid: ${selectedSequence.join(' -> ')}. Status: PASSED 100%`;
-          } else {
-            out.style.color = '#f87171';
-            out.textContent = `[ERROR] Urutan langkah belum tepat (${selectedSequence.join(', ') || 'kosong'}). Harus: ${expected.join(' -> ')}`;
-          }
-        }, 450);
-      });
+            if (isMatch) {
+              simCompleted = true;
+              document.getElementById('sim-container').setAttribute('data-completed', 'true');
+              out.style.color = '#34d399';
+              out.textContent = `[BERHASIL] Program berhasil dijalankan! Urutan valid: ${selectedSequence.join(' -> ')}. Status: PASSED 100%`;
+            } else {
+              out.style.color = '#f87171';
+              out.textContent = `[ERROR] Urutan langkah belum tepat (${selectedSequence.join(', ') || 'kosong'}). Harus: ${expected.join(' -> ')}`;
+            }
+          }, 450);
+        });
+      }
 
       // Event listener tombol Kirim Jawaban
       document.getElementById('btn-submit-module').addEventListener('click', () => {
