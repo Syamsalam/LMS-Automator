@@ -184,6 +184,43 @@ const LMSExecutor = {
   },
 
   /**
+   * Klik elemen navigasi / tautan modul (`<a href="...">` seperti pada daftar modul Canvas atau tombol `Take the Quiz` / `Next ›`)
+   * dan pastikan browser benar-benar berpindah ke halaman tujuan jika `href` merupakan URL halaman valid.
+   */
+  async navigateOrClick(el, highlightColor = '#06b6d4') {
+    if (!el) return false;
+    const anchor = el.tagName === 'A' ? el : el.closest ? el.closest('a[href]') : null;
+    const targetHref = anchor ? (anchor.href || anchor.getAttribute('href') || '').trim() : '';
+    const isBlankTarget = anchor && anchor.getAttribute('target') === '_blank';
+    const prevUrl = window.location.href;
+
+    if (targetHref && window.LMSScanner && typeof window.LMSScanner.markModuleUrlVisited === 'function') {
+      window.LMSScanner.markModuleUrlVisited(targetHref);
+    }
+
+    await this.clickElement(anchor || el, highlightColor);
+
+    // Jika elemen memiliki tautan <a href="..."> yang valid (bukan '#' atau 'javascript:') dan bukan tab baru,
+    // pastikan navigasi halaman benar-benar terjadi!
+    if (
+      anchor &&
+      targetHref &&
+      !isBlankTarget &&
+      !targetHref.startsWith('#') &&
+      !/^javascript:/i.test(targetHref)
+    ) {
+      await this.sleep(320);
+      if (window.location.href === prevUrl && anchor.href && anchor.href !== prevUrl) {
+        try {
+          window.location.assign(anchor.href);
+        } catch {}
+      }
+    }
+
+    return true;
+  },
+
+  /**
    * Isi teks pada <textarea>, <input>, atau elemen [contenteditable="true"]
    * Menggunakan native prototype value setter dari window pemilik elemen (aman terhadap lintas iframe & menghindari "Illegal invocation")
    */
@@ -1062,6 +1099,28 @@ const LMSExecutor = {
     if (selectedIds.length === 0) return false;
 
     const qAnchor = window.LMSScanner.getElementById(mcqScan.questionId);
+
+    // Untuk soal dropdown `<select>` (seperti pada Canvas Pre-Course Survey / Matching Question)
+    if (mcqScan.inputType === 'select' && qAnchor && qAnchor.tagName === 'SELECT') {
+      const chosenOptObj =
+        (mcqScan.options || []).find((o) => o.id === selectedIds[0]) || (mcqScan.options || [])[0];
+      if (!chosenOptObj) return false;
+
+      await this.scrollIntoViewSafe(qAnchor);
+      this.highlightElement(qAnchor, '#3b82f6', 850);
+      if (onLog) {
+        await onLog(`Memilih dropdown PG: "${chosenOptObj.text.slice(0, 65)}"`, 'action');
+      }
+
+      const win = qAnchor.ownerDocument?.defaultView || window;
+      const Ev = win.Event || Event;
+      qAnchor.value = chosenOptObj.selectValue ?? chosenOptObj.text;
+      qAnchor.dispatchEvent(new Ev('input', { bubbles: true }));
+      qAnchor.dispatchEvent(new Ev('change', { bubbles: true }));
+      qAnchor.setAttribute('data-lms-completed', 'true');
+      await this.sleep(Math.min(delay, 350));
+      return true;
+    }
 
     // Untuk soal checkbox (multi-select), klik semua opsi terpilih
     if (mcqScan.inputType === 'checkbox' && selectedIds.length > 1) {
