@@ -252,9 +252,19 @@ const LMSScanner = {
   },
 
   /**
-   * Simpan & baca daftar URL item modul yang sudah dikunjungi selama sesi Auto-Pilot berlangsung
+   * Simpan & baca daftar URL / ID item modul yang sudah dikunjungi selama sesi Auto-Pilot berlangsung
    * (agar saat kembali ke halaman `/modules`, Auto-Pilot otomatis membuka item modul berikutnya yang belum dikunjungi)
    */
+  extractCanvasModuleItemId(url) {
+    if (!url) return null;
+    const s = String(url);
+    const m1 = s.match(/\/modules\/items\/(\d+)/i);
+    if (m1) return `item:${m1[1]}`;
+    const m2 = s.match(/[?&]module_item_id=(\d+)/i);
+    if (m2) return `item:${m2[1]}`;
+    return null;
+  },
+
   getVisitedModuleUrls() {
     try {
       const raw = sessionStorage.getItem('lms_autopilot_visited_modules');
@@ -272,8 +282,19 @@ const LMSScanner = {
       if (!normalized) return;
       const visited = this.getVisitedModuleUrls();
       visited.add(normalized);
-      sessionStorage.setItem('lms_autopilot_visited_modules', JSON.stringify(Array.from(visited).slice(-200)));
+      const itemIdKey = this.extractCanvasModuleItemId(url);
+      if (itemIdKey) visited.add(itemIdKey);
+      sessionStorage.setItem('lms_autopilot_visited_modules', JSON.stringify(Array.from(visited).slice(-300)));
     } catch {}
+  },
+
+  isModuleUrlVisited(url) {
+    if (!url) return false;
+    const visited = this.getVisitedModuleUrls();
+    const normalized = String(url).split('#')[0].trim();
+    if (visited.has(normalized)) return true;
+    const itemIdKey = this.extractCanvasModuleItemId(url);
+    return Boolean(itemIdKey && visited.has(itemIdKey));
   },
 
   /**
@@ -429,7 +450,20 @@ const LMSScanner = {
     if (this.isRunButtonElement(el, customSelectors)) return false;
     if (el.closest('.py-editor-box, .code-editor, .editor-box, .code-box, .code-cell-editor')) return false;
 
-    // Deteksi langsung tombol eksplisit pembuka kuis Canvas / Articulate Rise / Mark as Done
+    const txt = this.cleanText(el.innerText || el.value || el.getAttribute('aria-label') || '');
+    if (!txt || txt.length < 4 || txt.length > 130) return false;
+
+    // PENTING: Jangan pernah mengklik tombol ulang kuis ("Take the Survey Again", "Take the Quiz Again", "Retake")
+    // atau tombol administrasi halaman ("+ Add Discussion", "Collapse All", "Expand All", "Settings", "View Progress")!
+    if (
+      /\b(again|retake|ulangi|add\s+discussion|new\s+discussion|collapse\s+all|expand\s+all|settings|view\s+progress)\b/i.test(
+        txt
+      )
+    ) {
+      return false;
+    }
+
+    // Deteksi langsung tombol eksplisit pembuka kuis Canvas / Articulate Rise / Mark as Done (selama bukan tombol "... Again")
     if (
       el.id === 'take_quiz_link' ||
       (el.id === 'mark-as-done-checkbox' && !el.classList.contains('checked')) ||
@@ -440,9 +474,6 @@ const LMSScanner = {
     ) {
       return true;
     }
-
-    const txt = this.cleanText(el.innerText || el.value || el.getAttribute('aria-label') || '');
-    if (!txt || txt.length < 4 || txt.length > 130) return false;
 
     // Jangan anggap tombol navigasi bab/assessment ("Chapter Assessment >") sebagai action prompt lokal
     if (/\b(chapter\s*assessment|module\s*assessment|unit\s*assessment|final\s*assessment)\b/i.test(txt)) {
@@ -463,7 +494,7 @@ const LMSScanner = {
     }
 
     const actionPromptRegex =
-      /\b(click\s+here\b|klik\s+di\s*sini\b|tap\s+here\b|click\s+to\s+(?:reveal|explore|represent|view|start|begin|see|open|load|show)|show\s+(?:both|the|all|data|dataframe|dataframes|table|tables|plot|plots|graph|chart|result|results|code|more|answer|solution|step|image|images|painting|paintings)|reveal\s+(?:data|table|answer|more|all|the)|represent\s+the\s+\w+\s+as\s+data|tampilkan\s+(?:data|tabel|kedua|semua)|mulai\s+(?:simulasi|kuis|evaluasi|modul|kursus|belajar|lab)|start\s+(?:quiz|the\s+quiz|survey|the\s+survey|attempt|course|module|lesson|learning|knowledge\s*check|assessment|lab|activity)|begin\s+(?:quiz|the\s+quiz|survey|attempt|course|module|lesson|learning|knowledge\s*check|assessment)|resume\s+(?:course|module|lesson|learning|quiz|the\s+quiz|survey)|launch\s+(?:course|module|lesson|content|knowledge\s*check|lab)|open\s+(?:module|lesson|course|quiz|knowledge\s*check)|take\s+(?:quiz|the\s+quiz|the\s+quiz\s+again|survey|the\s+survey|the\s+survey\s+again|knowledge\s*check)|enter\s+(?:course|module|lesson)|mark\s+as\s+(?:complete|done)|complete\s+and\s+continue|lanjutkan\s+belajar)\b/i;
+      /\b(click\s+here\b|klik\s+di\s*sini\b|tap\s+here\b|click\s+to\s+(?:reveal|explore|represent|view|start|begin|see|open|load|show)|show\s+(?:both|the|all|data|dataframe|dataframes|table|tables|plot|plots|graph|chart|result|results|code|more|answer|solution|step|image|images|painting|paintings)|reveal\s+(?:data|table|answer|more|all|the)|represent\s+the\s+\w+\s+as\s+data|tampilkan\s+(?:data|tabel|kedua|semua)|mulai\s+(?:simulasi|kuis|evaluasi|modul|kursus|belajar|lab)|start\s+(?:quiz|the\s+quiz|survey|the\s+survey|attempt|course|module|lesson|learning|knowledge\s*check|assessment|lab|activity)|begin\s+(?:quiz|the\s+quiz|survey|attempt|course|module|lesson|learning|knowledge\s*check|assessment)|resume\s+(?:course|module|lesson|learning|quiz|the\s+quiz|survey)|launch\s+(?:course|module|lesson|content|knowledge\s*check|lab)|open\s+(?:module|lesson|course|quiz|knowledge\s*check)|take\s+(?:quiz|the\s+quiz|survey|the\s+survey|knowledge\s*check)|enter\s+(?:course|module|lesson)|mark\s+as\s+(?:complete|done)|complete\s+and\s+continue|lanjutkan\s+belajar)\b/i;
 
     // Di NetAcad / Mathigon, tombol pembuka langkah hampir selalu diakhiri elipsis "..." atau "…"
     // (contoh: "Show both dataframes...", "Click here to represent the painting as data...")
@@ -472,7 +503,7 @@ const LMSScanner = {
     // Di AWS Skill Builder / Articulate Rise / Canvas / Coursera, tombol masuk ke dalam modul di area utama
     // sering bertuliskan "Start", "Resume", "Launch", "Start Course", "Start Module", "Start Quiz", "Take the Survey", "Begin", atau "Continue"
     const isEntryButtonText =
-      /^(?:start|resume|launch|begin|mulai|buka\s+modul|mulai\s+modul|start\s+course|resume\s+course|start\s+module|resume\s+module|launch\s+module|launch\s+course|start\s+lesson|start\s+quiz|take\s+the\s+quiz|take\s+the\s+quiz\s+again|take\s+the\s+survey|resume\s+quiz|start\s+knowledge\s+check|take\s+quiz|begin\s+course|continue\s+course|continue\s+learning)$/i.test(
+      /^(?:start|resume|launch|begin|mulai|buka\s+modul|mulai\s+modul|start\s+course|resume\s+course|start\s+module|resume\s+module|launch\s+module|launch\s+course|start\s+lesson|start\s+quiz|take\s+the\s+quiz|take\s+the\s+survey|resume\s+quiz|start\s+knowledge\s+check|take\s+quiz|begin\s+course|continue\s+course|continue\s+learning)$/i.test(
         txt
       );
 
@@ -3298,22 +3329,21 @@ const LMSScanner = {
   scanNavigation(customSelectors = {}, simulations = []) {
     // A. Jika saat ini berada di Halaman Daftar Modul (seperti `awsacademy.instructure.com/courses/184279/modules`),
     //    langsung cari item modul pertama yang belum selesai / belum dikunjungi untuk dimasuki!
+    //    PENTING: Selalu return di sini agar tidak pernah jatuh ke menu sidebar kiri (Home/Discussions/Grades/Notebook)!
     if (this.isModulesIndexPage()) {
       const modEntry = this.findNextModuleIndexItem();
-      if (modEntry) {
-        const nextId = this.tagElement(modEntry.el, 'nav-mod-entry');
-        return {
-          submitButtonId: null,
-          submitButtonLabel: null,
-          submitButtonIds: [],
-          nextButtonId: nextId,
-          nextButtonLabel: `Masuk Modul: ${modEntry.label}`,
-          nextButtonHref: modEntry.href || '',
-          isCarouselNext: false,
-          isOutlineNext: false,
-          isModuleIndexEntry: true
-        };
-      }
+      const nextId = modEntry ? this.tagElement(modEntry.el, 'nav-mod-entry') : null;
+      return {
+        submitButtonId: null,
+        submitButtonLabel: null,
+        submitButtonIds: [],
+        nextButtonId: nextId,
+        nextButtonLabel: modEntry ? `Masuk Modul: ${modEntry.label}` : null,
+        nextButtonHref: modEntry ? modEntry.href || '' : '',
+        isCarouselNext: false,
+        isOutlineNext: false,
+        isModuleIndexEntry: Boolean(modEntry)
+      };
     }
 
     const runBtnIds = new Set();
@@ -3452,8 +3482,26 @@ const LMSScanner = {
       }
     }
 
+    // Jika pengguna sedang berada di tab non-modul pada Canvas LMS (seperti Discussions, Announcements, Grades, Home, Lucid, atau Notebook)
+    // yang tidak memiliki tombol Next › (`.module-sequence-footer`), otomatis arahkan ke tab "Modules" agar masuk ke daftar modul!
+    if (!nextButtonId && document.querySelector('#section-tabs')) {
+      const hrefNow = window.location.href || '';
+      const isInsideModuleOrQuiz =
+        /\/(?:modules|quizzes)\//i.test(hrefNow) ||
+        Boolean(document.querySelector('.module-sequence-footer, #questions'));
+      if (!isInsideModuleOrQuiz) {
+        const modulesTabLink = document.querySelector(
+          '#section-tabs a.modules, #section-tabs a[href$="/modules"], #section-tabs a[href*="/modules"]'
+        );
+        if (modulesTabLink && this.isVisible(modulesTabLink)) {
+          nextButtonId = this.tagElement(modulesTabLink, 'nav-canvas-modules-tab');
+          nextButtonLabel = 'Buka Daftar Modul (Modules)';
+        }
+      }
+    }
+
     // Jika tidak ada tombol Next maupun panah Carousel `>` yang aktif di area konten utama,
-    // barulah pindah ke sub-modul berikutnya di Course Outline / Sidebar kiri (misal dari "Assessment" -> "Reflections")
+    // barulah pindah ke sub-modul berikutnya di Course Outline / Sidebar kiri (misal dari "Assessment" -> "Reflections" pada NetAcad)
     let isOutlineNext = false;
     if (!nextButtonId) {
       const nextOutlineItem = this.findNextOutlineItem();
@@ -3481,18 +3529,24 @@ const LMSScanner = {
    * (Contoh: `https://awsacademy.instructure.com/courses/184279/modules`)
    */
   findNextModuleIndexItem() {
-    const visitedUrls = this.getVisitedModuleUrls();
+    // 1. Kumpulkan semua baris item modul (`li.context_module_item`) yang tidak tersembunyi oleh `display: none`
+    const allItemRows = Array.from(
+      document.querySelectorAll(
+        '#context_modules li.context_module_item, .context_module_items li.context_module_item, li.context_module_item, .context_module_item, [data-module-item-id]'
+      )
+    );
 
-    // Jika ada grup modul yang terlipat (collapsed) dan belum ada item modul yang terlihat, buka lipatannya terlebih dahulu
-    const itemRows = Array.from(
-      document.querySelectorAll('li.context_module_item, .context_module_item, [data-module-item-id]')
-    ).filter((li) => this.isVisible(li));
+    const visibleItemRows = allItemRows.filter((li) => {
+      const r = li.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    });
 
-    if (itemRows.length === 0) {
+    // Jika semua modul masih terlipat (collapsed), klik tombol Expand All / pembuka modul terlebih dahulu
+    if (visibleItemRows.length === 0) {
       const expandBtn = document.querySelector(
-        '#expand_collapse_all, .collapse_module_link[aria-expanded="false"]'
+        '.collapse_module_link[aria-expanded="false"], #expand_collapse_all'
       );
-      if (expandBtn && this.isVisible(expandBtn)) {
+      if (expandBtn && expandBtn.getBoundingClientRect().width > 0) {
         return {
           el: expandBtn,
           label: this.cleanText(expandBtn.innerText || 'Expand Modules'),
@@ -3501,26 +3555,56 @@ const LMSScanner = {
       }
     }
 
+    const rowsToScan = visibleItemRows.length > 0 ? visibleItemRows : allItemRows;
     const candidates = [];
-    for (const li of itemRows) {
+
+    for (const li of rowsToScan) {
       if (
         li.classList.contains('context_module_item_locked') ||
         li.classList.contains('context_module_sub_header') ||
+        li.classList.contains('ig-sub-header') ||
         li.querySelector('.icon-lock, .locked_title')
       ) {
         continue;
       }
 
-      const linkEl = li.querySelector(
-        'a.ig-title.item_link, a.item_link, a.ig-title, a[href*="/modules/items/"], a[href*="/quizzes/"], a[href*="/pages/"], a[href*="/assignments/"]'
+      // PENTING: Di Canvas LMS, di dalam `<div class="ig-row">` terdapat `<a class="for-nvda" href="...">` (tersembunyi untuk screen reader)
+      // yang posisinya lebih dulu di DOM dibanding `<a class="ig-title title item_link">`.
+      // Jangan gunakan `li.querySelector(...)` gabungan karena akan menangkap `a.for-nvda` yang tidak terlihat!
+      const allLinks = Array.from(li.querySelectorAll('a[href]')).filter(
+        (a) =>
+          !a.classList.contains('for-nvda') &&
+          !a.classList.contains('screenreader-only') &&
+          !a.classList.contains('sr-only') &&
+          a.getAttribute('aria-hidden') !== 'true'
       );
-      if (!linkEl || !this.isVisible(linkEl)) continue;
+
+      const linkEl =
+        allLinks.find(
+          (a) =>
+            a.matches('a.ig-title.item_link, a.ig-title, a.item_link') &&
+            a.getBoundingClientRect().width > 0
+        ) ||
+        allLinks.find((a) => a.matches('a.ig-title.item_link, a.ig-title, a.item_link')) ||
+        allLinks.find(
+          (a) =>
+            /\/(?:modules\/items|quizzes|pages|assignments|discussion_topics)\//i.test(
+              a.getAttribute('href') || ''
+            ) && a.getBoundingClientRect().width > 0
+        ) ||
+        allLinks[0];
+
+      if (!linkEl) continue;
       if (linkEl.getAttribute('data-lms-nav-visited') === 'true') continue;
 
       const rawHref = (linkEl.href || linkEl.getAttribute('href') || '').split('#')[0].trim();
       if (!rawHref || /^javascript:/i.test(rawHref)) continue;
 
-      const label = this.cleanText(linkEl.getAttribute('title') || linkEl.innerText || 'Module Item');
+      const label = this.cleanText(
+        linkEl.getAttribute('title') || linkEl.innerText || linkEl.textContent || 'Module Item'
+      );
+      if (!label) continue;
+
       const isCanvasCompleted =
         Boolean(
           li.querySelector(
@@ -3528,9 +3612,9 @@ const LMSScanner = {
           )
         ) || /\bcompleted\b/i.test(li.className || '');
 
-      const isVisited = visitedUrls.has(rawHref);
+      const isVisited = this.isModuleUrlVisited(rawHref);
       const isGeneralDiscussion =
-        /\b(general\s*discussion|forum\s*diskusi|q\s*&\s*a)\b/i.test(label) ||
+        /\b(general\s*discussion|forum\s*diskusi|q\s*&\s*a|course\s*support)\b/i.test(label) ||
         Boolean(li.querySelector('.icon-discussion'));
 
       candidates.push({
@@ -3543,6 +3627,32 @@ const LMSScanner = {
       });
     }
 
+    // Fallback langsung jika tema Canvas menggunakan struktur tautan `/modules/items/` tanpa `li.context_module_item`
+    if (candidates.length === 0) {
+      const directLinks = Array.from(
+        document.querySelectorAll('#context_modules a[href*="/modules/items/"], main a[href*="/modules/items/"]')
+      ).filter(
+        (a) =>
+          !a.classList.contains('for-nvda') &&
+          !a.classList.contains('screenreader-only') &&
+          a.getBoundingClientRect().width > 0 &&
+          a.getAttribute('data-lms-nav-visited') !== 'true'
+      );
+      for (const a of directLinks) {
+        const rawHref = (a.href || a.getAttribute('href') || '').split('#')[0].trim();
+        const label = this.cleanText(a.getAttribute('title') || a.innerText || a.textContent || 'Module Item');
+        if (!rawHref || !label) continue;
+        candidates.push({
+          el: a,
+          label,
+          href: rawHref,
+          isCanvasCompleted: false,
+          isVisited: this.isModuleUrlVisited(rawHref),
+          isGeneralDiscussion: /\b(general\s*discussion)\b/i.test(label)
+        });
+      }
+    }
+
     if (candidates.length === 0) return null;
 
     // Prioritas 1: Item yang belum selesai di Canvas, belum dikunjungi di sesi ini, dan bukan General Discussion
@@ -3553,11 +3663,23 @@ const LMSScanner = {
     const prio2 = candidates.find((c) => !c.isCanvasCompleted && !c.isVisited);
     if (prio2) return prio2;
 
-    // Prioritas 3: Item pertama yang belum selesai di Canvas (meskipun sudah pernah dikunjungi sebelumnya)
+    // Prioritas 3: Jika masih ada modul yang terlipat (collapsed) dan semua modul yang terbuka sudah dikunjungi, buka modul berikutnya!
+    const collapsedModuleHeader = document.querySelector(
+      '.context_module.collapsed_module .ig-header, .collapse_module_link[aria-expanded="false"]'
+    );
+    if (collapsedModuleHeader && collapsedModuleHeader.getBoundingClientRect().width > 0) {
+      return {
+        el: collapsedModuleHeader,
+        label: this.cleanText(collapsedModuleHeader.innerText || 'Expand Next Module'),
+        href: ''
+      };
+    }
+
+    // Prioritas 4: Item pertama yang belum selesai di Canvas (meskipun sudah pernah dikunjungi sebelumnya)
     const prio3 = candidates.find((c) => !c.isCanvasCompleted && !c.isGeneralDiscussion);
     if (prio3) return prio3;
 
-    // Prioritas 4: Item pertama yang belum dikunjungi pada sesi ini
+    // Prioritas 5: Item pertama yang belum dikunjungi pada sesi ini
     const prio4 = candidates.find((c) => !c.isVisited && !c.isGeneralDiscussion);
     if (prio4) return prio4;
 
@@ -3650,10 +3772,23 @@ const LMSScanner = {
   },
 
   /**
-   * Cari item sub-modul berikutnya pada Course Outline / Sidebar kiri (misal dari "Art as Data" -> "Explore painting")
-   * Hanya digunakan untuk berpindah ke sub-modul berikutnya setelah halaman aktif di kanan benar-benar selesai!
+   * Cari item sub-modul berikutnya pada Course Outline / Sidebar kiri (misal dari "Art as Data" -> "Explore painting" pada NetAcad).
+   * PENTING: Jangan pernah menganggap menu kiri Canvas LMS (`Home`, `Announcements`, `Modules`, `Discussions`, `Grades`, `Lucid`, `Notebook`)
+   * sebagai daftar sub-modul!
    */
   findNextOutlineItem() {
+    // Pada Canvas LMS (`instructure.com` atau halaman dengan `#section-tabs`), menu kiri adalah tab kursus (Home..Notebook),
+    // BUKAN urutan bab materi! Navigasi modul Canvas ditangani oleh `findNextModuleIndexItem()` dan `.module-sequence-footer`.
+    if (
+      document.querySelector('#section-tabs, ul#section-tabs, .ic-app-course-menu') ||
+      /instructure\.com/i.test(window.location.hostname || '')
+    ) {
+      return null;
+    }
+
+    const genericMenuTabRegex =
+      /^(?:home|beranda|announcements?|pengumuman|modules?|modul|discussions?|diskusi|grades?(?:\s+\d+)?|nilai|people|peserta|pages|files|berkas|syllabus|silabus|outcomes|quizzes|conferences|collaborations|settings|pengaturan|lucid(?:\s*\(whiteboard\))?|whiteboard|notebook|badges|credentials|account|dashboard|courses|calendar|inbox|history|help)$/i;
+
     // Cari kontainer sidebar / course outline
     const allContainers = this.queryAllDeep(
       'aside, nav, [role="navigation"], [role="tree"], .sidebar, .course-outline, [class*="sidebar"], [class*="outline"], div'
@@ -3671,11 +3806,13 @@ const LMSScanner = {
     const rawItems = this.queryAllDeep('a, button, [role="treeitem"], [role="menuitem"], [role="button"], li, div', document)
       .filter((el) => {
         if (!this.isVisible(el) || !this.isInsideSidebarOrHeader(el)) return false;
+        if (el.closest && el.closest('#section-tabs, #header, .ic-app-header')) return false;
         const rect = el.getBoundingClientRect();
         if (rect.width < 80 || rect.width > 380 || rect.height < 20 || rect.height > 62) return false;
         const txt = this.cleanText(el.innerText || '');
         if (!txt || txt.length < 3 || txt.length > 85) return false;
         if (/^(course\s*outline|resources|search\s*course)/i.test(txt)) return false;
+        if (genericMenuTabRegex.test(txt)) return false;
         // Abaikan baris induk bab yang menampilkan penghitung seperti "1 / 3", "0 / 9", "100 Pts"
         if (/\b\d+\s*\/\s*\d+\b|\b\d+\s*pts\b/i.test(txt)) return false;
         const win = el.ownerDocument?.defaultView || window;
