@@ -20,6 +20,9 @@ const LMSAutoPilot = {
     const hasPrompt = (scan.actionPrompts || []).some(
       (p) => !p.isCompleted && !this.completedTaskIds.has(p.promptId)
     );
+    const hasVideo = (scan.videos || []).some(
+      (v) => !v.isCompleted && !this.completedTaskIds.has(v.videoId)
+    );
     const hasBlank = (scan.inlineBlanks || []).some(
       (b) => !b.isFilled && !this.completedTaskIds.has(b.blankId)
     );
@@ -29,7 +32,25 @@ const LMSAutoPilot = {
     const hasEssay = (scan.essays || []).some(
       (e) => !e.isFilled && !this.completedTaskIds.has(e.essayId)
     );
-    return hasSim || hasPrompt || hasBlank || hasMcq || hasEssay;
+    return hasSim || hasPrompt || hasVideo || hasBlank || hasMcq || hasEssay;
+  },
+
+  /**
+   * Cek apakah halaman utama (`window.top`) memiliki cross-origin iframe aktif yang berukuran besar
+   * (seperti SCORM / Articulate Rise / Knowledge Check / Lab Player pada AWS Skill Builder atau NetAcad)
+   */
+  hasActiveCrossOriginContentIframe() {
+    if (window !== window.top) return false;
+    return window.LMSScanner.queryAllDeep('iframe').some((f) => {
+      if (!window.LMSScanner.isVisible(f)) return false;
+      const rect = f.getBoundingClientRect();
+      if (rect.width < 260 || rect.height < 180) return false;
+      try {
+        return !f.contentDocument;
+      } catch {
+        return true;
+      }
+    });
   },
 
   async init() {
@@ -110,7 +131,15 @@ const LMSAutoPilot = {
               `Berpindah sub-modul: klik "${nav.nextButtonLabel}"`,
               'action'
             );
+            nextEl.setAttribute('data-lms-nav-visited', 'true');
             await window.LMSExecutor.clickElement(nextEl, '#06b6d4');
+            await window.LMSExecutor.sleep(Number(latestConfig.pageLoadDelay) || 1400);
+            const afterNavState = await window.LMSStorage.getState();
+            if (afterNavState.isRunning && !this.isExecutingCycle) {
+              this.completedTaskIds.clear();
+              this.failedTaskIds.clear();
+              this.runCycle();
+            }
             return;
           }
         }
@@ -273,20 +302,10 @@ const LMSAutoPilot = {
         initialScan.summary.mcqCount +
         initialScan.summary.essayCount;
 
-      // Jika window.top adalah shell luar (seperti netacad.com/launch) yang tidak memiliki tugas langsung
+      // Jika window.top adalah shell luar (seperti AWS Skill Builder / NetAcad launch) yang tidak memiliki tugas langsung
       // dan memiliki cross-origin iframe aktif di dalamnya, biarkan iframe kursus yang menjalankan siklus!
-      if (window === window.top && initialTotalTasks === 0) {
-        const hasCrossOriginIframe = window.LMSScanner.queryAllDeep('iframe').some((f) => {
-          if (!window.LMSScanner.isVisible(f)) return false;
-          try {
-            return !f.contentDocument;
-          } catch {
-            return true;
-          }
-        });
-        if (hasCrossOriginIframe) {
-          return;
-        }
+      if (window === window.top && initialTotalTasks === 0 && this.hasActiveCrossOriginContentIframe()) {
+        return;
       }
 
       // Jika di dalam frame ini tidak ada tugas sama sekali dan tidak ada tombol navigasi:
@@ -309,7 +328,7 @@ const LMSAutoPilot = {
 
       if (initialTotalTasks > 0) {
         await window.LMSStorage.addLog(
-          `Terdeteksi: ${initialScan.summary.simulationCount} Simulasi, ${initialScan.summary.mcqCount} PG, ${initialScan.summary.essayCount} Esai.`,
+          `Terdeteksi: ${initialScan.summary.simulationCount} Simulasi/Aksi, ${initialScan.summary.mcqCount} PG, ${initialScan.summary.essayCount} Esai.`,
           'info'
         );
       }
@@ -332,8 +351,21 @@ const LMSAutoPilot = {
           window.LMSHud.updateScanSummary(pageData.summary);
         }
 
+        // Jika setelah menekan tombol "Start / Launch / Resume" muncul cross-origin iframe modul (seperti SCORM / Rise 360 / Knowledge Check),
+        // hentikan siklus di window.top agar tidak mengklik daftar modul di sidebar sementara iframe sedang bekerja!
+        if (
+          window === window.top &&
+          !this.hasPendingWork(pageData) &&
+          this.hasActiveCrossOriginContentIframe()
+        ) {
+          return;
+        }
+
         const pendingPrompts = (pageData.actionPrompts || []).filter(
           (p) => !p.isCompleted && !this.completedTaskIds.has(p.promptId)
+        );
+        const pendingVideos = (pageData.videos || []).filter(
+          (v) => !v.isCompleted && !this.completedTaskIds.has(v.videoId)
         );
         const pendingSims = (pageData.simulations || []).filter(
           (s) => !s.isCompleted && !this.completedTaskIds.has(s.taskId)
@@ -348,8 +380,8 @@ const LMSAutoPilot = {
           (e) => !e.isFilled && !this.completedTaskIds.has(e.essayId)
         );
 
-        // Prioritas 0: Jika ada tombol pemicu aktivitas ("Click here to represent the painting as data...", dll.),
-        // klik terlebih dahulu untuk membuka tabel/simulasi/soal berikutnya!
+        // Prioritas 0A: Jika ada tombol pemicu aktivitas / peluncur modul ("Start", "Resume", "Launch", "Start Quiz", "Click here to..."),
+        // klik terlebih dahulu untuk masuk ke dalam modul / membuka simulasi / membuka soal!
         if (pendingPrompts.length > 0) {
           const promptItem = pendingPrompts[0];
           const promptEl = window.LMSScanner.getElementById(promptItem.promptId);
@@ -360,14 +392,38 @@ const LMSAutoPilot = {
               statusText: `Menekan tombol interaktif: "${promptItem.label.slice(0, 40)}..."`
             });
             await window.LMSStorage.addLog(
-              `Menekan tombol langkah interaktif: "${promptItem.label}"`,
+              `Menekan tombol langkah/modul: "${promptItem.label}"`,
               'action'
             );
             await window.LMSExecutor.clickElement(promptEl, '#f59e0b');
             promptEl.setAttribute('data-lms-completed', 'true');
-            await window.LMSExecutor.sleep(Math.max(Number(config.actionDelay) || 500, 550));
+            await window.LMSExecutor.sleep(Math.max(Number(config.actionDelay) || 500, 750));
             continue;
           }
+        }
+
+        // Prioritas 0B: Jika ada materi Video (`<video>` pada AWS Skill Builder / Canvas / Coursera) yang belum selesai,
+        // putar & selesaikan progres videonya terlebih dahulu agar modul video tercentang selesai!
+        if (pendingVideos.length > 0) {
+          const videoItem = pendingVideos[0];
+          this.completedTaskIds.add(videoItem.videoId);
+          await window.LMSStorage.updateState({
+            currentPhase: 'SIMULATION',
+            statusText: 'Menyelesaikan pemutaran materi video...'
+          });
+          const doneVideo = await window.LMSExecutor.executeVideo(
+            videoItem,
+            config,
+            (msg, lvl) => window.LMSStorage.addLog(msg, lvl)
+          );
+          if (doneVideo) {
+            const currentState = await window.LMSStorage.getState();
+            const stats = { ...(currentState.stats || window.LMSStorage.DEFAULT_STATE.stats) };
+            stats.simulationsRun = (stats.simulationsRun || 0) + 1;
+            await window.LMSStorage.updateState({ stats });
+          }
+          await window.LMSExecutor.sleep(450);
+          continue;
         }
 
         const pendingCount =
@@ -608,10 +664,38 @@ const LMSAutoPilot = {
 
       // 5. Pindai ulang tombol Next (kadang tombol Next baru muncul/aktif setelah Submit atau setelah semua tugas selesai!)
       await window.LMSExecutor.sleep(500);
-      const postSubmitNav = window.LMSScanner.scanNavigation(
+
+      // PENTING (Untuk AWS Skill Builder / SCORM / Rise 360):
+      // Jika halaman utama memiliki cross-origin iframe materi/kuis/lab yang sedang terbuka,
+      // JANGAN klik item berikutnya pada Course Outline / Sidebar dari window.top!
+      // Biarkan content script di dalam iframe yang menyelesaikan materi/kuis terlebih dahulu hingga mengirim sinyal NAVIGATE_READY.
+      if (window === window.top && this.hasActiveCrossOriginContentIframe()) {
+        this.isExecutingCycle = false;
+        return;
+      }
+
+      let postSubmitNav = window.LMSScanner.scanNavigation(
         config.customSelectors || {},
         lastPageData.simulations
       );
+
+      // Jika satu-satunya navigasi yang ditemukan adalah item di Sidebar/Outline (`isOutlineNext`),
+      // tetapi halaman saat ini sama sekali belum menjalankan tugas/submit apa pun (`completedTaskIds.size === 0`),
+      // tunggu sejenak dan pindai ulang apakah ada tombol "Start / Launch / Resume" atau video/kuis yang baru dimuat secara asinkron!
+      if (postSubmitNav.isOutlineNext && this.completedTaskIds.size === 0) {
+        await window.LMSExecutor.sleep(1100);
+        const delayedScan = window.LMSScanner.scanPage(config);
+        if (this.hasPendingWork(delayedScan)) {
+          this.isExecutingCycle = false;
+          await this.runCycle();
+          return;
+        }
+        if (window === window.top && this.hasActiveCrossOriginContentIframe()) {
+          this.isExecutingCycle = false;
+          return;
+        }
+        postSubmitNav = delayedScan.navigation;
+      }
 
       if (postSubmitNav.nextButtonId) {
         const nextEl = window.LMSScanner.getElementById(postSubmitNav.nextButtonId);

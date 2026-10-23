@@ -194,7 +194,6 @@ const LMSAIClient = {
         ...fallbackResult
       };
     }
-    }
 
     throw new Error('API Key belum diisi. Buka pengaturan ekstensi untuk memasukkan API Key atau aktifkan Smart Fallback.');
   },
@@ -659,10 +658,12 @@ KEMBALIKAN HANYA JSON VALID DENGAN SKEMA BERIKUT:
 
       // Evaluasi khusus untuk opsi berbentuk baris program (Python/Pandas DataFrame seperti `df.query('count == 16')`)
       const codeOptionBonusMap = this.evaluatePandasCodeOptions(rawQText, options, q.tableData || null);
+      // Evaluasi khusus untuk konsep AWS Cloud Computing (AWS Academy / AWS Skill Builder Knowledge Check)
+      const awsBonusMap = this.evaluateAWSCloudKnowledgeOptions(rawQText, options);
 
       // Skor setiap opsi berdasarkan konteks materi halaman, tabel DataFrame, & heuristik semantik
       const scored = options.map((opt, idx) => {
-        let score = codeOptionBonusMap.get(opt.id) || 0;
+        let score = (codeOptionBonusMap.get(opt.id) || 0) + (awsBonusMap.get(opt.id) || 0);
         const optText = (opt.text || '').trim();
         const optLower = optText.toLowerCase();
 
@@ -1366,6 +1367,112 @@ KEMBALIKAN HANYA JSON VALID DENGAN SKEMA BERIKUT:
       }
     }
     return true;
+  },
+
+  /**
+   * Basis Pengetahuan & Heuristik AWS Cloud Computing (untuk Knowledge Check di AWS Skill Builder / AWS Academy)
+   * Membantu memilih opsi layanan/konsep AWS yang paling akurat bahkan tanpa koneksi API LLM eksternal!
+   */
+  evaluateAWSCloudKnowledgeOptions(rawQText = '', options = []) {
+    const bonusMap = new Map();
+    if (!Array.isArray(options) || options.length === 0) return bonusMap;
+
+    const qLower = rawQText.toLowerCase();
+    const isNegated = /\b(not|except|false|incorrect|bukan|kecuali)\b/i.test(qLower);
+
+    const awsRules = [
+      {
+        q: /\b(object\s+storage|store\s+objects|unstructured\s+data|static\s+website\s+hosting|99\.999999999%|11\s+9s)\b/i,
+        a: /\b(amazon\s+s3|simple\s+storage\s+service|s3)\b/i
+      },
+      {
+        q: /\b(virtual\s+server|resizable\s+compute\s+capacity|virtual\s+machine|iaas\s+compute|ec2\s+instance)\b/i,
+        a: /\b(amazon\s+ec2|elastic\s+compute\s+cloud|ec2)\b/i
+      },
+      {
+        q: /\b(serverless\s+compute|run\s+code\s+without\s+provisioning|event-driven\s+code)\b/i,
+        a: /\b(aws\s+lambda|lambda)\b/i
+      },
+      {
+        q: /\b(isolated\s+virtual\s+network|virtual\s+network\s+dedicated|subnets|route\s+tables|internet\s+gateway)\b/i,
+        a: /\b(amazon\s+vpc|virtual\s+private\s+cloud|vpc)\b/i
+      },
+      {
+        q: /\b(users,\s*groups,\s*and\s*roles|permissions|access\s+to\s+aws\s+services\s+and\s+resources|least\s+privilege|authentication\s+and\s+authorization)\b/i,
+        a: /\b(aws\s+iam|identity\s+and\s+access\s+management|iam)\b/i
+      },
+      {
+        q: /\b(relational\s+database|sql\s+database|mysql|postgresql|oracle|aurora)\b/i,
+        a: /\b(amazon\s+rds|relational\s+database\s+service|amazon\s+aurora|rds)\b/i
+      },
+      {
+        q: /\b(nosql\s+database|key-value|millisecond\s+latency\s+at\s+any\s+scale)\b/i,
+        a: /\b(amazon\s+dynamodb|dynamodb)\b/i
+      },
+      {
+        q: /\b(content\s+delivery\s+network|cdn|edge\s+locations|low\s+latency\s+content)\b/i,
+        a: /\b(amazon\s+cloudfront|cloudfront)\b/i
+      },
+      {
+        q: /\b(domain\s+name\s+system|dns\s+web\s+service|route\s+end\s+users)\b/i,
+        a: /\b(amazon\s+route\s*53|route\s*53)\b/i
+      },
+      {
+        q: /\b(distribute\s+incoming\s+application\s+traffic|load\s+balancing|across\s+multiple\s+targets)\b/i,
+        a: /\b(elastic\s+load\s+balancing|elb|application\s+load\s+balancer|alb)\b/i
+      },
+      {
+        q: /\b(automatically\s+add\s+or\s+remove\s+ec2|scale\s+compute\s+capacity|match\s+demand)\b/i,
+        a: /\b(auto\s+scaling|amazon\s+ec2\s+auto\s+scaling)\b/i
+      },
+      {
+        q: /\b(monitor\s+aws\s+resources|metrics\s+and\s+logs|alarms|cloudwatch\s+alarm)\b/i,
+        a: /\b(amazon\s+cloudwatch|cloudwatch)\b/i
+      },
+      {
+        q: /\b(audit|api\s+calls|track\s+user\s+activity|governance\s+and\s+compliance\s+of\s+your\s+aws\s+account)\b/i,
+        a: /\b(aws\s+cloudtrail|cloudtrail)\b/i
+      },
+      {
+        q: /\b(infrastructure\s+as\s+code|provision\s+resources\s+using\s+templates|json\s+or\s+yaml\s+templates)\b/i,
+        a: /\b(aws\s+cloudformation|cloudformation)\b/i
+      },
+      {
+        q: /\b(shared\s+responsibility\s+model)\b[\s\S]*\b(customer\s+responsibility|responsible\s+for\s+security\s+in\s+the\s+cloud)\b/i,
+        a: /\b(customer\s+data|iam|operating\s+system|network\s+and\s+firewall|security\s+group|encryption|patch\s+guest\s+os)\b/i
+      },
+      {
+        q: /\b(shared\s+responsibility\s+model)\b[\s\S]*\b(aws\s+responsibility|security\s+of\s+the\s+cloud)\b/i,
+        a: /\b(physical\s+security|data\s+center|hardware|hypervisor|global\s+infrastructure)\b/i
+      },
+      {
+        q: /\b(estimate\s+the\s+cost|estimate\s+aws\s+costs|cost\s+of\s+architecture)\b/i,
+        a: /\b(aws\s+pricing\s+calculator|pricing\s+calculator)\b/i
+      },
+      {
+        q: /\b(long-term\s+archive|data\s+archiving|low-cost\s+archive)\b/i,
+        a: /\b(glacier|s3\s+glacier)\b/i
+      },
+      {
+        q: /\b(block\s+level\s+storage|block\s+storage\s+volumes\s+for\s+use\s+with\s+ec2)\b/i,
+        a: /\b(amazon\s+ebs|elastic\s+block\s+store|ebs)\b/i
+      }
+    ];
+
+    for (const opt of options) {
+      const optTxt = (opt.text || '').trim();
+      let bonus = 0;
+      for (const rule of awsRules) {
+        if (rule.q.test(qLower) && rule.a.test(optTxt)) {
+          bonus += isNegated ? -85 : 95;
+        }
+      }
+      if (bonus !== 0) {
+        bonusMap.set(opt.id, bonus);
+      }
+    }
+
+    return bonusMap;
   }
 };
 

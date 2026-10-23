@@ -1352,6 +1352,75 @@ const LMSExecutor = {
     }
 
     return null;
+  },
+
+  /**
+   * 4. Selesaikan Materi Video (`<video>` HTML5 / Video.js / JWPlayer pada modul AWS Skill Builder, Canvas, Coursera, dll.)
+   *    Memutar, mempercepat (`playbackRate = 16`), dan memajukan progres ke akhir durasi (`ended`) agar modul video tercentang selesai!
+   */
+  async executeVideo(videoScan, config, onLog) {
+    const v = window.LMSScanner.getElementById(videoScan.videoId);
+    if (!v || v.tagName !== 'VIDEO') return false;
+
+    if (onLog) {
+      await onLog('Memproses penyelesaian materi video pada modul...', 'action');
+    }
+
+    await this.scrollIntoViewSafe(v);
+    this.highlightElement(v, '#f59e0b', 1000);
+
+    try {
+      v.muted = true;
+      try {
+        v.playbackRate = 16;
+      } catch {
+        try {
+          v.playbackRate = 4;
+        } catch {}
+      }
+
+      // Coba klik tombol Play overlay (seperti .vjs-big-play-button pada Video.js di AWS Skill Builder) jika video masih paused
+      if (v.paused) {
+        const container = v.parentElement?.parentElement || v.parentElement;
+        if (container) {
+          const playBtn = container.querySelector(
+            '.vjs-big-play-button, .vjs-play-control, [aria-label*="Play" i], button[title*="Play" i]'
+          );
+          if (playBtn && window.LMSScanner.isVisible(playBtn)) {
+            await this.clickElement(playBtn, '#f59e0b');
+            await this.sleep(250);
+          }
+        }
+        try {
+          await v.play();
+        } catch {}
+      }
+
+      await this.sleep(350);
+
+      const dur = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
+      const win = v.ownerDocument?.defaultView || window;
+      const Ev = win.Event || Event;
+
+      if (dur > 1) {
+        // Majukan ke 99% terlebih dahulu agar LMS mencatat timeupdate menjelang akhir, lalu ke akhir durasi
+        try {
+          v.currentTime = Math.max(0, dur - 0.4);
+          v.dispatchEvent(new Ev('timeupdate', { bubbles: true }));
+          await this.sleep(300);
+          v.currentTime = dur;
+        } catch {}
+      }
+
+      v.dispatchEvent(new Ev('timeupdate', { bubbles: true }));
+      v.dispatchEvent(new Ev('ended', { bubbles: true }));
+    } catch {
+      // Abaikan jika pemutar video membatasi manipulasi properti
+    }
+
+    v.setAttribute('data-lms-completed', 'true');
+    await this.sleep(350);
+    return true;
   }
 };
 

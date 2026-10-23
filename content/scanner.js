@@ -230,6 +230,7 @@ const LMSScanner = {
     const mcqs = this.scanMCQs(customSelectors, simulations);
     const inlineBlanks = this.scanInlineBlanks(customSelectors, simulations);
     const actionPrompts = this.scanActionPrompts(customSelectors, simulations);
+    const videos = this.scanVideos();
     const essays = this.scanEssays(customSelectors, simulations);
     const navigation = this.scanNavigation(customSelectors, simulations);
 
@@ -241,10 +242,11 @@ const LMSScanner = {
       mcqs,
       inlineBlanks,
       actionPrompts,
+      videos,
       essays,
       navigation,
       summary: {
-        simulationCount: simulations.length + actionPrompts.length,
+        simulationCount: simulations.length + actionPrompts.length + videos.length,
         mcqCount: mcqs.length + inlineBlanks.length,
         essayCount: essays.length,
         hasSubmit: Boolean(navigation.submitButtonId),
@@ -382,18 +384,25 @@ const LMSScanner = {
     }
 
     const actionPromptRegex =
-      /\b(click\s+here\b|klik\s+di\s*sini\b|tap\s+here\b|click\s+to\s+(?:reveal|explore|represent|view|start|begin|see|open|load|show)|show\s+(?:both|the|all|data|dataframe|dataframes|table|tables|plot|plots|graph|chart|result|results|code|more|answer|solution|step|image|images|painting|paintings)|reveal\s+(?:data|table|answer|more|all|the)|represent\s+the\s+\w+\s+as\s+data|tampilkan\s+(?:data|tabel|kedua|semua)|mulai\s+(?:simulasi|kuis|evaluasi)|start\s+(?:quiz|attempt)|begin\s+(?:quiz|attempt))\b/i;
+      /\b(click\s+here\b|klik\s+di\s*sini\b|tap\s+here\b|click\s+to\s+(?:reveal|explore|represent|view|start|begin|see|open|load|show)|show\s+(?:both|the|all|data|dataframe|dataframes|table|tables|plot|plots|graph|chart|result|results|code|more|answer|solution|step|image|images|painting|paintings)|reveal\s+(?:data|table|answer|more|all|the)|represent\s+the\s+\w+\s+as\s+data|tampilkan\s+(?:data|tabel|kedua|semua)|mulai\s+(?:simulasi|kuis|evaluasi|modul|kursus|belajar|lab)|start\s+(?:quiz|attempt|course|module|lesson|learning|knowledge\s*check|assessment|lab|activity)|begin\s+(?:quiz|attempt|course|module|lesson|learning|knowledge\s*check|assessment)|resume\s+(?:course|module|lesson|learning|quiz)|launch\s+(?:course|module|lesson|content|knowledge\s*check|lab)|open\s+(?:module|lesson|course|quiz|knowledge\s*check)|take\s+(?:quiz|knowledge\s*check)|enter\s+(?:course|module|lesson)|mark\s+as\s+complete|complete\s+and\s+continue|lanjutkan\s+belajar)\b/i;
 
     // Di NetAcad / Mathigon, tombol pembuka langkah hampir selalu diakhiri elipsis "..." atau "…"
     // (contoh: "Show both dataframes...", "Click here to represent the painting as data...")
     const endsWithEllipsis = /(?:\.{3}|…)\s*$/.test(txt) && !/^\[\s*(?:\.{2,}|…)\s*\]$/.test(txt);
 
-    if (!actionPromptRegex.test(txt) && !endsWithEllipsis) {
+    // Di AWS Skill Builder / Articulate Rise / Canvas / Coursera, tombol masuk ke dalam modul di area utama
+    // sering bertuliskan "Start", "Resume", "Launch", "Start Course", "Start Module", "Start Quiz", "Begin", atau "Continue"
+    const isEntryButtonText =
+      /^(?:start|resume|launch|begin|mulai|buka\s+modul|mulai\s+modul|start\s+course|resume\s+course|start\s+module|resume\s+module|launch\s+module|launch\s+course|start\s+lesson|start\s+quiz|start\s+knowledge\s+check|take\s+quiz|begin\s+course|continue\s+course|continue\s+learning)$/i.test(
+        txt
+      );
+
+    if (!actionPromptRegex.test(txt) && !endsWithEllipsis && !isEntryButtonText) {
       return false;
     }
 
     const rect = el.getBoundingClientRect();
-    if (rect.width < 55 || rect.height < 22 || rect.height > 110) return false;
+    if (rect.width < 48 || rect.height < 20 || rect.height > 110) return false;
 
     const win = el.ownerDocument?.defaultView || window;
     const style = win.getComputedStyle(el);
@@ -1809,8 +1818,8 @@ const LMSScanner = {
   },
 
   /**
-   * 1C. Pindai Tombol Aksi / Pembuka Langkah Interaktif pada Modul
-   *     (Contoh pada NetAcad: "Click here to represent the painting as data...", "Show both dataframes...", "Reveal", "Continue...")
+   * 1C. Pindai Tombol Aksi / Pembuka Langkah Interaktif / Peluncur Modul (Start / Resume / Launch / Continue / Accordion)
+   *     (Contoh: "Start Course", "Start Module", "Start Quiz", "Launch", "Resume", "Click here to...", "Show both dataframes...")
    */
   scanActionPrompts(customSelectors = {}, simulations = []) {
     const prompts = [];
@@ -1840,7 +1849,63 @@ const LMSScanner = {
       });
     }
 
+    // Tambahan: Deteksi Accordion / Tab / Flip-card yang belum dibuka (`aria-expanded="false"`) di area materi utama (seperti pada modul AWS / Rise 360)
+    const accordions = this.queryAllDeep(
+      'button[aria-expanded="false"], [role="button"][aria-expanded="false"], .blocks-accordion__header[aria-expanded="false"], .accordion-button.collapsed'
+    ).filter((el) => {
+      if (!this.isVisible(el) || this.isInsideSidebarOrHeader(el)) return false;
+      if (el.getAttribute('data-lms-completed') === 'true') return false;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 100 || rect.height < 24 || rect.height > 120) return false;
+      const txt = this.cleanText(el.innerText || el.getAttribute('aria-label') || '');
+      if (!txt || txt.length < 3 || txt.length > 140) return false;
+      if (/\b(menu|navigation|sidebar|outline|filter|search|profile|account|settings|help)\b/i.test(txt)) return false;
+      return true;
+    });
+
+    for (const acc of accordions.slice(0, 6)) {
+      if (prompts.some((p) => this.getElementById(p.promptId) === acc)) continue;
+      const promptId = this.tagElement(acc, `action-prompt-${pIdx++}`);
+      const label = this.cleanText(acc.innerText || acc.getAttribute('aria-label') || 'Expand section');
+      prompts.push({
+        promptId,
+        label,
+        isCompleted: false
+      });
+    }
+
     return prompts;
+  },
+
+  /**
+   * 1D. Pindai Materi Video (`<video>` HTML5 / Video.js / JWPlayer di AWS Skill Builder, Canvas, Coursera, dll.)
+   *     agar video yang belum selesai dapat diputar & dipercepat / diselesaikan otomatis sebelum pindah ke modul berikutnya!
+   */
+  scanVideos() {
+    const videos = [];
+    const videoEls = this.queryAllDeep('video').filter(
+      (v) => this.isVisible(v) && !this.isInsideSidebarOrHeader(v)
+    );
+
+    let vIdx = 1;
+    for (const v of videoEls) {
+      const videoId = this.tagElement(v, `video-${vIdx++}`);
+      const duration = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
+      const currentTime = Number.isFinite(v.currentTime) ? v.currentTime : 0;
+      const isCompleted =
+        v.getAttribute('data-lms-completed') === 'true' ||
+        Boolean(v.ended) ||
+        (duration > 2 && currentTime >= duration - 1.5);
+
+      videos.push({
+        videoId,
+        duration,
+        currentTime,
+        isCompleted
+      });
+    }
+
+    return videos;
   },
 
   /**
@@ -3200,11 +3265,13 @@ const LMSScanner = {
 
     // Jika tidak ada tombol Next maupun panah Carousel `>` yang aktif di area konten utama,
     // barulah pindah ke sub-modul berikutnya di Course Outline / Sidebar kiri (misal dari "Assessment" -> "Reflections")
+    let isOutlineNext = false;
     if (!nextButtonId) {
       const nextOutlineItem = this.findNextOutlineItem();
       if (nextOutlineItem) {
         nextButtonId = this.tagElement(nextOutlineItem.el, 'nav-outline-next');
         nextButtonLabel = nextOutlineItem.label;
+        isOutlineNext = true;
       }
     }
 
@@ -3214,7 +3281,8 @@ const LMSScanner = {
       submitButtonIds,
       nextButtonId,
       nextButtonLabel,
-      isCarouselNext
+      isCarouselNext,
+      isOutlineNext
     };
   },
 
