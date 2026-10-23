@@ -1,9 +1,24 @@
 /**
  * LMS Auto-Pilot - Multi-Provider AI Client & Smart Heuristic Solver
- * Mendukung: Google Gemini, OpenAI, Groq, Custom Endpoint + Smart Heuristic Fallback
+ * Mendukung:
+ * - Mode Lokal (Smart Contextual Engine - 100% Gratis & Tanpa API Key)
+ * - Pollinations Free Cloud AI (100% Gratis & Tanpa API Key)
+ * - Ollama / LM Studio Lokal (http://localhost:11434 - 100% Gratis & Tanpa API Key)
+ * - Google Gemini (Free Tier di Google AI Studio)
+ * - Groq Cloud (Free Tier Llama 3.3)
+ * - OpenRouter (Model :free)
+ * - OpenAI / Custom Endpoint
  */
 
 const LMSAIClient = {
+  /**
+   * Cek apakah provider memerlukan API Key atau bisa berjalan tanpa API Key
+   */
+  isKeylessProvider(provider) {
+    const p = (provider || '').toLowerCase();
+    return p === 'local' || p === 'pollinations' || p === 'ollama';
+  },
+
   /**
    * Panggil LLM API dan kembalikan objek JSON terurai
    */
@@ -11,7 +26,11 @@ const LMSAIClient = {
     const provider = (config.aiProvider || 'gemini').toLowerCase();
     const apiKey = (config.apiKey || '').trim();
 
-    if (!apiKey) {
+    if (provider === 'local') {
+      return { status: 'ok', message: 'Mode Smart Contextual Engine (Lokal) aktif tanpa API Key!' };
+    }
+
+    if (!apiKey && !this.isKeylessProvider(provider) && provider !== 'custom') {
       throw new Error('NO_API_KEY: API Key belum diatur.');
     }
 
@@ -48,24 +67,37 @@ const LMSAIClient = {
       return this.safeParseJson(rawText);
     }
 
-    // OpenAI / Groq / Custom OpenAI-compatible
+    // OpenAI / Groq / Pollinations (Free Keyless) / Ollama (Local Keyless) / OpenRouter / Custom
     let endpoint = 'https://api.openai.com/v1/chat/completions';
     let defaultModel = 'gpt-4o-mini';
 
     if (provider === 'groq') {
       endpoint = 'https://api.groq.com/openai/v1/chat/completions';
       defaultModel = 'llama-3.3-70b-versatile';
+    } else if (provider === 'pollinations') {
+      endpoint = 'https://text.pollinations.ai/openai';
+      defaultModel = 'openai';
+    } else if (provider === 'ollama') {
+      endpoint = (config.customEndpoint || '').trim() || 'http://localhost:11434/v1/chat/completions';
+      defaultModel = 'qwen2.5-coder:7b';
+    } else if (provider === 'openrouter') {
+      endpoint = 'https://openrouter.ai/api/v1/chat/completions';
+      defaultModel = 'meta-llama/llama-3.3-70b-instruct:free';
     } else if (provider === 'custom' && config.customEndpoint) {
       endpoint = config.customEndpoint;
     }
 
     const model = config.model || defaultModel;
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
+      headers,
       body: JSON.stringify({
         model,
         temperature: 0.2,
@@ -128,9 +160,14 @@ const LMSAIClient = {
    * Selesaikan seluruh tugas pada halaman modul sekaligus (Simulasi Tombol, Pilihan Ganda, Esai)
    */
   async solvePageTasks(pageData, config) {
+    const provider = (config.aiProvider || 'gemini').toLowerCase();
     const hasApiKey = Boolean((config.apiKey || '').trim());
+    const isLocalCustom =
+      provider === 'custom' && /^https?:\/\/(localhost|127\.0\.0\.1)\b/i.test(config.customEndpoint || '');
+    const canCallLLM =
+      provider !== 'local' && (hasApiKey || provider === 'pollinations' || provider === 'ollama' || isLocalCustom);
 
-    if (hasApiKey) {
+    if (canCallLLM) {
       try {
         const aiResult = await this.solvePageTasksWithLLM(pageData, config);
         return {
@@ -150,12 +187,13 @@ const LMSAIClient = {
       }
     }
 
-    if (config.useSmartFallback !== false) {
+    if (provider === 'local' || config.useSmartFallback !== false) {
       const fallbackResult = this.solveWithSmartHeuristics(pageData, config);
       return {
         source: 'Smart Contextual Engine (Local)',
         ...fallbackResult
       };
+    }
     }
 
     throw new Error('API Key belum diisi. Buka pengaturan ekstensi untuk memasukkan API Key atau aktifkan Smart Fallback.');

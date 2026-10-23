@@ -63,31 +63,35 @@
       <div class="form-group">
         <label for="ai-provider">Provider AI</label>
         <select id="ai-provider">
-          <option value="gemini">Google Gemini API (Direkomendasikan)</option>
+          <option value="local">⚡ Smart Contextual Engine (Lokal • 100% Gratis Tanpa API Key)</option>
+          <option value="pollinations">🌐 Pollinations AI (Cloud Gratis • Tanpa API Key)</option>
+          <option value="ollama">💻 Ollama / LM Studio (AI Lokal PC • Tanpa API Key)</option>
+          <option value="gemini">Google Gemini API (Free Tier di Google AI Studio)</option>
+          <option value="groq">Groq Cloud API (Free Tier • Llama 3.3 Cepat)</option>
+          <option value="openrouter">OpenRouter API (Model :free Gratis)</option>
           <option value="openai">OpenAI API (GPT-4o / Mini)</option>
-          <option value="groq">Groq Cloud API (Llama 3.3 Cepat)</option>
           <option value="custom">Custom OpenAI-Compatible Endpoint</option>
         </select>
       </div>
 
-      <div class="form-group">
+      <div class="form-group" id="model-group">
         <label for="ai-model">Model AI</label>
         <input type="text" id="ai-model" placeholder="gemini-2.5-flash" />
-        <small class="hint" id="model-hint">Contoh: gemini-2.5-flash, gemini-2.0-flash, gpt-4o-mini</small>
+        <small class="hint" id="model-hint">Contoh: gemini-2.5-flash, llama-3.3-70b-versatile, qwen2.5-coder:7b</small>
       </div>
 
       <div class="form-group" id="custom-endpoint-group" style="display: none;">
         <label for="custom-endpoint">Endpoint URL (Chat Completions)</label>
-        <input type="url" id="custom-endpoint" placeholder="https://api.openai.com/v1/chat/completions" />
+        <input type="url" id="custom-endpoint" placeholder="http://localhost:11434/v1/chat/completions" />
       </div>
 
-      <div class="form-group">
-        <label for="api-key">API Key</label>
+      <div class="form-group" id="api-key-group">
+        <label for="api-key">API Key (Opsional untuk Mode Gratis/Lokal)</label>
         <div class="input-with-btn">
-          <input type="password" id="api-key" placeholder="Masukkan API Key Anda..." />
+          <input type="password" id="api-key" placeholder="Kosongkan untuk mode Lokal / Pollinations / Ollama..." />
           <button type="button" class="btn-icon" id="btn-toggle-key" title="Tampilkan/Sembunyikan">👁️</button>
         </div>
-        <small class="hint">Kosongkan jika ingin menggunakan Smart Contextual Heuristic lokal.</small>
+        <small class="hint" id="api-key-hint">Kosongkan jika menggunakan Smart Contextual Engine, Pollinations, atau Ollama.</small>
       </div>
 
       <div class="form-check">

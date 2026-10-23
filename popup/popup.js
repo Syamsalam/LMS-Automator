@@ -3,11 +3,35 @@
  */
 
 const DEFAULT_MODELS = {
+  local: 'smart-contextual-v2',
+  pollinations: 'openai',
+  ollama: 'qwen2.5-coder:7b',
   gemini: 'gemini-2.5-flash',
-  openai: 'gpt-4o-mini',
   groq: 'llama-3.3-70b-versatile',
+  openrouter: 'meta-llama/llama-3.3-70b-instruct:free',
+  openai: 'gpt-4o-mini',
   custom: 'gpt-4o-mini'
 };
+
+function updateProviderUI(prov) {
+  const customGroup = document.getElementById('custom-endpoint-group');
+  const modelGroup = document.getElementById('model-group');
+  const apiKeyGroup = document.getElementById('api-key-group');
+  const customEndpointEl = document.getElementById('custom-endpoint');
+
+  if (customGroup) {
+    customGroup.style.display = prov === 'custom' || prov === 'ollama' ? 'flex' : 'none';
+  }
+  if (prov === 'ollama' && customEndpointEl && !customEndpointEl.value) {
+    customEndpointEl.value = 'http://localhost:11434/v1/chat/completions';
+  }
+  if (modelGroup) {
+    modelGroup.style.display = prov === 'local' ? 'none' : 'flex';
+  }
+  if (apiKeyGroup) {
+    apiKeyGroup.style.display = prov === 'local' || prov === 'pollinations' || prov === 'ollama' ? 'none' : 'flex';
+  }
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
   const config = await window.LMSStorage.getConfig();
@@ -29,12 +53,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Provider change updates default model suggestion
   const providerEl = document.getElementById('ai-provider');
   const modelEl = document.getElementById('ai-model');
-  const customGroup = document.getElementById('custom-endpoint-group');
 
   providerEl.addEventListener('change', () => {
     const prov = providerEl.value;
     modelEl.value = DEFAULT_MODELS[prov] || 'gemini-2.5-flash';
-    customGroup.style.display = prov === 'custom' ? 'flex' : 'none';
+    updateProviderUI(prov);
   });
 
   // Show/hide API key
@@ -49,9 +72,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const draft = readFormConfig();
     await window.LMSStorage.saveConfig(draft);
 
-    if (!draft.apiKey) {
+    if (draft.aiProvider === 'local' || (!draft.apiKey && !['pollinations', 'ollama', 'custom'].includes(draft.aiProvider))) {
       feedbackEl.className = 'feedback-msg';
-      feedbackEl.textContent = '✓ Mode Smart Contextual Heuristic aktif (tanpa API Key).';
+      feedbackEl.textContent = '✓ Mode Smart Contextual Heuristic aktif (100% Gratis & Tanpa API Key).';
       return;
     }
 
@@ -64,7 +87,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         feedbackEl.textContent = `✓ Berhasil terhubung ke ${draft.aiProvider} (${draft.model})!`;
       } else {
         feedbackEl.className = 'feedback-msg error';
-        feedbackEl.textContent = `✗ Gagal: ${res?.error || 'Periksa kembali API Key Anda'}`;
+        feedbackEl.textContent = `✗ Gagal: ${res?.error || 'Periksa kembali koneksi / API Key Anda'}`;
       }
     });
   });
@@ -119,13 +142,13 @@ function sendToActiveTab(message) {
 }
 
 function populateForm(config) {
-  document.getElementById('ai-provider').value = config.aiProvider || 'gemini';
-  document.getElementById('ai-model').value = config.model || 'gemini-2.5-flash';
+  const prov = config.aiProvider || 'gemini';
+  document.getElementById('ai-provider').value = prov;
+  document.getElementById('ai-model').value = config.model || DEFAULT_MODELS[prov] || 'gemini-2.5-flash';
   document.getElementById('custom-endpoint').value = config.customEndpoint || '';
-  document.getElementById('custom-endpoint-group').style.display =
-    config.aiProvider === 'custom' ? 'flex' : 'none';
   document.getElementById('api-key').value = config.apiKey || '';
   document.getElementById('use-smart-fallback').checked = config.useSmartFallback !== false;
+  updateProviderUI(prov);
 
   document.getElementById('action-delay').value = config.actionDelay ?? 650;
   document.getElementById('program-wait').value = config.programWaitTime ?? 1800;
