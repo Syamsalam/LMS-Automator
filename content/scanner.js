@@ -110,16 +110,45 @@ const LMSScanner = {
     return matches[0] || null;
   },
 
+  isZeroOpacityInteractiveOverlay(el, style, rect) {
+    if (!el || rect.width < 14 || rect.height < 14) return false;
+    if (style.pointerEvents === 'none') return false;
+    const tag = (el.tagName || '').toUpperCase();
+    const role = el.getAttribute('role') || '';
+    const cls = typeof el.className === 'string' ? el.className : '';
+    const isAccOverlay =
+      /\b(acc-element|acc-button|acc-input|acc-radio|acc-checkbox)\b/i.test(cls) ||
+      el.hasAttribute('data-acc-text') ||
+      (tag === 'INPUT' && (el.type === 'radio' || el.type === 'checkbox')) ||
+      ((tag === 'BUTTON' || role === 'button' || role === 'radio' || role === 'checkbox') &&
+        Boolean(el.closest && el.closest('#preso, #slide, .slide-container, .frame-wrap, [data-acc-text]')));
+    if (!isAccOverlay) return false;
+
+    const win = el.ownerDocument?.defaultView || window;
+    let p = el.parentElement;
+    for (let d = 0; d < 6 && p && p.nodeType === 1; d++) {
+      if (p.tagName === 'BODY' || p.tagName === 'HTML') break;
+      const pStyle = win.getComputedStyle(p);
+      if (pStyle.display === 'none' || pStyle.visibility === 'hidden') return false;
+      p = p.parentElement;
+    }
+    return true;
+  },
+
   isVisible(el) {
     if (!el || el.nodeType !== 1 || typeof el.getBoundingClientRect !== 'function') return false;
-    if (el.closest && el.closest('#lms-autopilot-hud-host')) return false;
+    if (el.closest && el.closest('#lms-autopilot-hud-host, [aria-hidden="true"]')) return false;
     const win = el.ownerDocument?.defaultView || window;
     const style = win.getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0) {
+    if (style.display === 'none' || style.visibility === 'hidden') {
       return false;
     }
     const rect = el.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return false;
+
+    if (parseFloat(style.opacity) === 0 && !this.isZeroOpacityInteractiveOverlay(el, style, rect)) {
+      return false;
+    }
 
     // Pastikan elemen tidak berada di luar layar secara horizontal (misal slide carousel sebelumnya/berikutnya)
     const vw = win.innerWidth || el.ownerDocument?.documentElement?.clientWidth || 1024;
@@ -150,6 +179,54 @@ const LMSScanner = {
 
   cleanText(str) {
     return (str || '').replace(/\s+/g, ' ').trim();
+  },
+
+  /**
+   * Ekstrak teks bersih dari elemen DOM, termasuk dukungan penuh untuk Articulate Storyline 360 / Rise / SVG
+   * (`data-acc-text`, `aria-label`, `<svg><text><tspan>`, maupun `innerText`).
+   */
+  getElementText(el) {
+    if (!el || el.nodeType !== 1) return '';
+    const isGenericShapeOrAsset = (s) => {
+      const t = (s || '').trim();
+      if (!t) return true;
+      if (/\.(?:png|jpe?g|gif|svg|webp|mp4|mp3|wav|pdf)$/i.test(t)) return true;
+      return /^(?:rectangle|oval|button|picture|image|shape|group|freeform|hotspot|text\s*box|vectorshape|line|arrow|polygon|frame|slide\s*object)\s*\d*(?:\.\w+)?$/i.test(
+        t
+      );
+    };
+
+    const acc = this.cleanText(el.getAttribute('data-acc-text') || '');
+    if (acc && !isGenericShapeOrAsset(acc)) return acc;
+
+    const aria = this.cleanText(el.getAttribute('aria-label') || el.getAttribute('title') || el.value || '');
+    if (aria && !isGenericShapeOrAsset(aria)) return aria;
+
+    const inner = typeof el.innerText === 'string' ? this.cleanText(el.innerText) : '';
+    if (inner && !isGenericShapeOrAsset(inner)) return inner;
+
+    if (el.querySelector) {
+      const childAccEl = el.querySelector('[data-acc-text], [aria-label]');
+      if (childAccEl) {
+        const cAcc = this.cleanText(
+          childAccEl.getAttribute('data-acc-text') || childAccEl.getAttribute('aria-label') || ''
+        );
+        if (cAcc && !isGenericShapeOrAsset(cAcc)) return cAcc;
+      }
+
+      const svgTexts = Array.from(el.querySelectorAll('text'));
+      if (svgTexts.length > 0) {
+        const joinedSvg = this.cleanText(svgTexts.map((tNode) => tNode.textContent || '').join(' '));
+        if (joinedSvg && !isGenericShapeOrAsset(joinedSvg)) return joinedSvg;
+      }
+    }
+
+    const tag = (el.tagName || '').toUpperCase();
+    if (tag === 'TEXT' || tag === 'TSPAN') {
+      return this.cleanText(el.textContent || '');
+    }
+
+    return inner || '';
   },
 
   /**
@@ -371,11 +448,21 @@ const LMSScanner = {
 
     const clone = root.cloneNode(true);
     const ignored = clone.querySelectorAll(
-      'script, style, noscript, nav, footer, header, #lms-autopilot-hud-host, svg, button, .options-list, .sim-buttons-grid, .nav-footer'
+      'script, style, noscript, nav, footer, header, #lms-autopilot-hud-host, button, .options-list, .sim-buttons-grid, .nav-footer'
     );
     ignored.forEach((n) => n.remove());
 
-    const rawText = clone.innerText || clone.textContent || '';
+    let rawText = clone.innerText || '';
+    // Jika halaman menggunakan Articulate Storyline / SVG canvas di mana innerText kosong, ekstrak dari [data-acc-text] & <svg><text>
+    if (this.cleanText(rawText).length < 40) {
+      const accParts = this.queryAllDeep('[data-acc-text], svg text', root)
+        .map((el) => this.getElementText(el))
+        .filter((t) => t.length > 2);
+      if (accParts.length > 0) {
+        rawText = `${rawText}\n${accParts.join('\n')}`;
+      }
+    }
+
     return rawText
       .split(/\n+/)
       .map((line) => line.replace(/[ \t]+/g, ' ').trim())
@@ -450,13 +537,13 @@ const LMSScanner = {
     if (this.isRunButtonElement(el, customSelectors)) return false;
     if (el.closest('.py-editor-box, .code-editor, .editor-box, .code-box, .code-cell-editor')) return false;
 
-    const txt = this.cleanText(el.innerText || el.value || el.getAttribute('aria-label') || '');
+    const txt = this.getElementText(el);
     if (!txt || txt.length < 4 || txt.length > 130) return false;
 
-    // PENTING: Jangan pernah mengklik tombol ulang kuis ("Take the Survey Again", "Take the Quiz Again", "Retake")
+    // PENTING: Jangan pernah mengklik tombol ulang/review kuis ("Take the Survey Again", "Take the Quiz Again", "Retake", "Retry Quiz", "Review Quiz")
     // atau tombol administrasi halaman ("+ Add Discussion", "Collapse All", "Expand All", "Settings", "View Progress")!
     if (
-      /\b(again|retake|ulangi|add\s+discussion|new\s+discussion|collapse\s+all|expand\s+all|settings|view\s+progress)\b/i.test(
+      /\b(again|retake|retry|review\s+quiz|ulangi|add\s+discussion|new\s+discussion|collapse\s+all|expand\s+all|settings|view\s+progress)\b/i.test(
         txt
       )
     ) {
@@ -500,19 +587,33 @@ const LMSScanner = {
     // (contoh: "Show both dataframes...", "Click here to represent the painting as data...")
     const endsWithEllipsis = /(?:\.{3}|…)\s*$/.test(txt) && !/^\[\s*(?:\.{2,}|…)\s*\]$/.test(txt);
 
-    // Di AWS Skill Builder / Articulate Rise / Canvas / Coursera, tombol masuk ke dalam modul di area utama
-    // sering bertuliskan "Start", "Resume", "Launch", "Start Course", "Start Module", "Start Quiz", "Take the Survey", "Begin", atau "Continue"
+    // Di AWS Academy (Articulate Storyline 360 / Rise 360) / AWS Skill Builder / Canvas / Coursera,
+    // tombol masuk ke dalam layar Knowledge Check / modul sering bertuliskan "Start", "Resume", "Launch", "Begin", "Take the Survey", dll.
     const isEntryButtonText =
       /^(?:start|resume|launch|begin|mulai|buka\s+modul|mulai\s+modul|start\s+course|resume\s+course|start\s+module|resume\s+module|launch\s+module|launch\s+course|start\s+lesson|start\s+quiz|take\s+the\s+quiz|take\s+the\s+survey|resume\s+quiz|start\s+knowledge\s+check|take\s+quiz|begin\s+course|continue\s+course|continue\s+learning)$/i.test(
         txt
       );
 
-    if (!actionPromptRegex.test(txt) && !endsWithEllipsis && !isEntryButtonText) {
+    // Tombol "Continue" pada layer feedback Articulate Storyline / blok Rise 360
+    const isStorylineFeedbackContinue =
+      /^(?:continue|lanjutkan)$/i.test(txt) &&
+      Boolean(
+        el.closest &&
+          el.closest('.slide-layer, .feedback-layer, [role="dialog"], .block-continue, #preso, #slide, .slide-container')
+      );
+
+    if (!actionPromptRegex.test(txt) && !endsWithEllipsis && !isEntryButtonText && !isStorylineFeedbackContinue) {
       return false;
     }
 
     const rect = el.getBoundingClientRect();
-    if (rect.width < 48 || rect.height < 20 || rect.height > 110) return false;
+    if (rect.width < 42 || rect.width > 420 || rect.height < 18 || rect.height > 110) return false;
+
+    // Jika teks persis adalah tombol peluncur seperti "Start" / "Resume" / "Launch" / "Take the Survey" dengan ukuran tombol kompak,
+    // izinkan meskipun elemen digambar menggunakan <svg><path> pada Articulate Storyline!
+    if ((isEntryButtonText || isStorylineFeedbackContinue) && rect.width <= 340 && rect.height <= 95) {
+      return true;
+    }
 
     const win = el.ownerDocument?.defaultView || window;
     const style = win.getComputedStyle(el);
@@ -933,12 +1034,16 @@ const LMSScanner = {
   },
 
   /**
-   * Cek apakah suatu elemen merupakan kotak visual bergaya tombol/pill
+   * Cek apakah suatu elemen merupakan kotak visual bergaya tombol/pill (termasuk tombol SVG pada Articulate Storyline 360)
    */
   hasVisualPillStyle(el) {
     if (!el || el.nodeType !== 1) return false;
     const tag = el.tagName.toUpperCase();
     if (tag === 'BUTTON' || el.getAttribute('role') === 'button') return true;
+    const cls = typeof el.className === 'string' ? el.className : '';
+    if (/\b(cursor-hover|slide-object-button|slide-object-stategroup|acc-button|cs-button)\b/i.test(cls)) {
+      return true;
+    }
     const win = el.ownerDocument?.defaultView || window;
     const style = win.getComputedStyle(el);
     const hasBg =
@@ -952,7 +1057,17 @@ const LMSScanner = {
       parseFloat(style.borderTopWidth) > 0 ||
       parseFloat(style.borderBottomWidth) > 0 ||
       (style.boxShadow && style.boxShadow !== 'none');
-    return Boolean(hasBg && (hasRadius || hasBorder));
+    if (hasBg && (hasRadius || hasBorder)) return true;
+
+    // Deteksi tombol berbasis <svg><path>/<rect> pada player interaktif (seperti tombol "Start" gelap di Articulate Storyline 360)
+    if (el.querySelector && el.querySelector('svg path[fill], svg rect[fill], svg path[stroke], svg rect[stroke]')) {
+      const r = el.getBoundingClientRect();
+      if (r.width >= 42 && r.width <= 420 && r.height >= 18 && r.height <= 110) {
+        return true;
+      }
+    }
+
+    return false;
   },
 
   /**
@@ -1933,7 +2048,9 @@ const LMSScanner = {
    */
   scanActionPrompts(customSelectors = {}, simulations = []) {
     const prompts = [];
-    const candidates = this.queryAllDeep('button, [role="button"], a, div, span');
+    const candidates = this.queryAllDeep(
+      'button, [role="button"], a, [data-acc-text], .slide-object, .acc-element, div, span'
+    );
     const matchedEls = [];
 
     for (const el of candidates) {
@@ -1949,9 +2066,21 @@ const LMSScanner = {
     );
 
     let pIdx = 1;
+    const addedRects = [];
     for (const el of leafPrompts) {
+      const r = el.getBoundingClientRect();
+      const label = this.getElementText(el) || 'Click here';
+      // Hindari duplikasi jika di Articulate Storyline ada .slide-object dan .acc-element pada koordinat yang sama
+      const isDuplicateAtSameSpot = addedRects.some(
+        (prev) =>
+          prev.label.toLowerCase() === label.toLowerCase() &&
+          Math.abs(prev.rect.top - r.top) <= 18 &&
+          Math.abs(prev.rect.left - r.left) <= 18
+      );
+      if (isDuplicateAtSameSpot) continue;
+
+      addedRects.push({ rect: r, label });
       const promptId = this.tagElement(el, `action-prompt-${pIdx++}`);
-      const label = this.cleanText(el.innerText || el.value || 'Click here');
       prompts.push({
         promptId,
         label,
@@ -2365,12 +2494,21 @@ const LMSScanner = {
         markOptionProcessed(clickTarget);
         optDomElements.push(clickTarget);
 
-        const rawText = this.cleanText(
-          (labelEl ? labelEl.innerText || labelEl.textContent : '') ||
-            inp.getAttribute('aria-label') ||
-            inp.value ||
-            ''
-        );
+        let rawText = this.getElementText(labelEl || inp);
+        // Jika pada Articulate Storyline elemen <input class="acc-element"> transparan berada di atas .slide-object, ambil teks dari .slide-object pada posisi vertikal yang sama
+        if (!rawText && questionContainer) {
+          const inpRect = (labelEl || inp).getBoundingClientRect();
+          const siblingSlideObj = Array.from(
+            questionContainer.querySelectorAll('[data-acc-text], .slide-object, span, div')
+          ).find((s) => {
+            if (s === inp || s === labelEl || !this.isVisible(s)) return false;
+            const sRect = s.getBoundingClientRect();
+            return Math.abs(sRect.top - inpRect.top) <= 22 && this.getElementText(s).length > 0;
+          });
+          if (siblingSlideObj) {
+            rawText = this.getElementText(siblingSlideObj);
+          }
+        }
         const cleanOptText = rawText.replace(/^(?:\(?[A-Fa-f]\)?[\.\):]?|[ⒶⒷⒸⒹⒺⒻ])\s+/, '').trim() || rawText;
 
         resolvedOptions.push({
@@ -2403,9 +2541,9 @@ const LMSScanner = {
       });
     }
 
-    // B. Komponen Pilihan Ganda Kustom Eksplisit (role="radiogroup" / kartu opsi dengan class standar / Articulate Rise Knowledge Check)
+    // B. Komponen Pilihan Ganda Kustom Eksplisit (role="radiogroup" / role="checkbox" / kartu opsi / Articulate Storyline & Rise Knowledge Check)
     const rawCustomOptions = this.queryAllDeep(
-      '[role="radio"], [role="option"], .quiz-option, .option-card, .choice-item, .mcq__item, .quiz-card__option, .quiz-multiple-choice-option, .quiz-multiple-response-option, .block-knowledge__option, [data-option], [data-choice]'
+      '[role="radio"], [role="checkbox"], [role="option"], .quiz-option, .option-card, .choice-item, .mcq__item, .quiz-card__option, .quiz-multiple-choice-option, .quiz-multiple-response-option, .block-knowledge__option, [data-option], [data-choice]'
     ).filter((el) => {
       if (
         !this.isVisible(el) ||
@@ -2417,7 +2555,7 @@ const LMSScanner = {
       }
       if (simContainers.some((sc) => sc === el || sc.contains(el))) return false;
       if (el.querySelector('input[type="radio"], input[type="checkbox"]')) return false;
-      const t = this.cleanText(el.innerText || el.textContent || '');
+      const t = this.getElementText(el);
       return t.length > 0 && !this.isSubmitOrNavButtonText(t) && !this.isActionPromptElement(el, customSelectors);
     });
 
@@ -2430,15 +2568,35 @@ const LMSScanner = {
       if (optionEls.length < 2) continue;
       optionEls.forEach(markOptionProcessed);
 
-      const anchorEl = optionEls[0];
+      // Hindari duplikasi opsi pada koordinat layar yang sama (misal .acc-element dan .slide-object pada Articulate Storyline)
+      const dedupedOptionEls = [];
+      for (const optEl of optionEls) {
+        const r = optEl.getBoundingClientRect();
+        const t = this.getElementText(optEl).toLowerCase();
+        if (
+          dedupedOptionEls.some((prev) => {
+            const pr = prev.getBoundingClientRect();
+            return (
+              Math.abs(pr.top - r.top) <= 14 &&
+              (Math.abs(pr.left - r.left) <= 24 || this.getElementText(prev).toLowerCase() === t)
+            );
+          })
+        ) {
+          continue;
+        }
+        dedupedOptionEls.push(optEl);
+      }
+      if (dedupedOptionEls.length < 2) continue;
+
+      const anchorEl = dedupedOptionEls[0];
       const questionId = this.tagQuestionElement(anchorEl, `mcq-custom-${qIndex++}`);
 
-      const options = optionEls.map((optEl) => {
+      const options = dedupedOptionEls.map((optEl) => {
         // Jika optEl hanya berisi huruf A..F dan memiliki wrapper baris dengan kode di sebelahnya, ambil teks barisnya
         let rowEl = optEl;
         let p = optEl.parentElement;
         for (let d = 0; d < 2 && p; d++) {
-          const touchesOther = optionEls.some((other) => other !== optEl && p.contains(other));
+          const touchesOther = dedupedOptionEls.some((other) => other !== optEl && p.contains(other));
           if (touchesOther) break;
           if (this.isVisible(p) && p.getBoundingClientRect().height <= 120) rowEl = p;
           p = p.parentElement;
@@ -2447,7 +2605,7 @@ const LMSScanner = {
         const rowId = this.tagElement(rowEl, 'mcq-crow');
         if (rowEl !== optEl) markOptionProcessed(rowEl);
 
-        const rawTxt = this.cleanText(rowEl.innerText || rowEl.textContent || optEl.innerText || '');
+        const rawTxt = this.getElementText(rowEl) || this.getElementText(optEl);
         const cleanTxt = rawTxt.replace(/^(?:\(?[A-Fa-f]\)?[\.\):]?|[ⒶⒷⒸⒹⒺⒻ])\s+/, '').trim() || rawTxt;
 
         return {
@@ -2460,13 +2618,14 @@ const LMSScanner = {
       });
 
       const isCompleted = anchorEl.getAttribute('data-lms-completed') === 'true';
+      const isCheckboxGroup = dedupedOptionEls.some((el) => el.getAttribute('role') === 'checkbox');
 
       rawMcqs.push({
         questionId,
         anchorEl,
         containerEl: anchorEl.parentElement || anchorEl,
-        optDomElements: optionEls,
-        inputType: 'radio',
+        optDomElements: dedupedOptionEls,
+        inputType: isCheckboxGroup ? 'checkbox' : 'radio',
         options,
         isCompleted
       });
@@ -2770,14 +2929,16 @@ const LMSScanner = {
     }
 
     // C-2b. Fallback Umum: Deteksi rentetan berurutan 3..6 baris opsi vertikal yang sejajar di dalam kontainer mana pun
-    // (Tetap bekerja meskipun di dalam kontainer yang sama terdapat `<p>` teks soal atau `<table>` DataFrame!)
-    const candidateGroups = this.queryAllDeep('div, ul, ol, section, fieldset, article').filter(
-      (box) =>
-        this.isVisible(box) &&
-        !this.isInsideSidebarOrHeader(box) &&
-        !this.isInsideModuleListIndex(box) &&
-        !simContainers.some((sc) => sc === box || sc.contains(box) || box.contains(sc))
-    );
+    // (Mendukung penuh Articulate Storyline 360 di mana .slide-layer memiliki anak position:absolute sehingga tinggi box bisa 0px!)
+    const candidateGroups = this.queryAllDeep('div, ul, ol, section, fieldset, article').filter((box) => {
+      if (!box || box.nodeType !== 1) return false;
+      if (this.isInsideSidebarOrHeader(box) || this.isInsideModuleListIndex(box)) return false;
+      const win = box.ownerDocument?.defaultView || window;
+      const st = win.getComputedStyle(box);
+      if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+      if (simContainers.some((sc) => sc === box || sc.contains(box) || box.contains(sc))) return false;
+      return box.children && box.children.length >= 3;
+    });
 
     for (const box of candidateGroups) {
       if (box.querySelector('input[type="radio"], input[type="checkbox"], textarea, select')) continue;
@@ -2799,14 +2960,21 @@ const LMSScanner = {
 
         const r = c.getBoundingClientRect();
         if (r.height < 20 || r.height > 115 || r.width < 85) return false;
-        const txt = this.cleanText(c.innerText || c.textContent || '');
+        const txt = this.getElementText(c);
         if (!txt || txt.length > 260 || this.isSubmitOrNavButtonText(txt) || this.isActionPromptElement(c, customSelectors)) {
+          return false;
+        }
+        // Jangan masukkan teks judul pertanyaan (yang diakhiri tanda tanya '?' atau '(Select TWO.)') sebagai baris opsi jawaban!
+        if (/\?\s*(?:\((?:select|choose)\s+\w+\.?\))?$/i.test(txt)) {
           return false;
         }
         return true;
       });
 
       if (candidateRows.length < 3) continue;
+
+      // Urutkan dari atas ke bawah berdasarkan posisi visual (penting pada Articulate Storyline di mana .slide-object diurutkan menurut z-index)
+      candidateRows.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
 
       // Cari sub-rentetan (contiguous runs) 3..6 baris yang sejajar secara vertikal
       let i = 0;
@@ -2848,6 +3016,9 @@ const LMSScanner = {
               row.tagName === 'BUTTON' ||
               row.getAttribute('role') === 'button' ||
               row.getAttribute('role') === 'radio' ||
+              row.getAttribute('role') === 'checkbox' ||
+              row.hasAttribute('data-acc-text') ||
+              (row.classList && row.classList.contains('slide-object')) ||
               this.hasVisualPillStyle(row) ||
               this.isDarkCodePillElement(row)
             ) {
@@ -2874,18 +3045,16 @@ const LMSScanner = {
                 (ch) =>
                   this.isVisible(ch) &&
                   (this.hasVisualPillStyle(ch) || this.isDarkCodePillElement(ch)) &&
-                  this.cleanText(ch.innerText || ch.textContent || '').length > 1
+                  this.getElementText(ch).length > 1
               );
               pillCandidates.sort(
-                (a, b) =>
-                  this.cleanText(b.innerText || b.textContent || '').length -
-                  this.cleanText(a.innerText || a.textContent || '').length
+                (a, b) => this.getElementText(b).length - this.getElementText(a).length
               );
               const pillChild = pillCandidates[0] || null;
               const clickEl = pillChild || row;
               const optId = this.tagElement(clickEl, 'mcq-sopt');
               const rowId = this.tagElement(row, 'mcq-srow');
-              const rawTxt = this.cleanText(row.innerText || row.textContent || '');
+              const rawTxt = this.getElementText(row);
               const cleanTxt = rawTxt.replace(/^(?:\(?[A-Fa-f]\)?[\.\):]?|[ⒶⒷⒸⒹⒺⒻ])\s+/, '').trim() || rawTxt;
 
               return {
@@ -3159,7 +3328,7 @@ const LMSScanner = {
     let basePrompt = '';
     if (firstOptTop !== null && minY !== null && maxY !== null) {
       const textNodes = Array.from(
-        scopeEl.querySelectorAll('p, h1, h2, h3, h4, h5, .question-text, .prompt, li, div, span')
+        scopeEl.querySelectorAll('p, h1, h2, h3, h4, h5, .question-text, .prompt, [data-acc-text], .slide-object, li, div, span')
       ).filter((el) => {
         if (!this.isVisible(el)) return false;
         if (el.closest('table')) return false;
@@ -3168,7 +3337,7 @@ const LMSScanner = {
         }
         const r = el.getBoundingClientRect();
         if (r.bottom < minY - 4 || r.top > maxY) return false;
-        const t = this.cleanText(el.innerText || el.textContent || '');
+        const t = this.getElementText(el);
         return t.length >= 4 && !/^(df|result\s*df)\s*:?$/i.test(t);
       });
 
@@ -3176,17 +3345,23 @@ const LMSScanner = {
         (el) => !textNodes.some((other) => other !== el && other.contains(el))
       );
       if (outerTextNodes.length > 0) {
-        basePrompt = outerTextNodes
-          .map((el) => this.cleanText(el.innerText || el.textContent || ''))
-          .join(' ')
-          .slice(0, 900);
+        const seenPrompts = new Set();
+        const promptLines = [];
+        for (const el of outerTextNodes) {
+          const txt = this.getElementText(el);
+          if (txt && !seenPrompts.has(txt.toLowerCase())) {
+            seenPrompts.add(txt.toLowerCase());
+            promptLines.push(txt);
+          }
+        }
+        basePrompt = promptLines.join(' ').slice(0, 900);
       }
     }
 
     if (!basePrompt) {
       const clone = scopeEl.cloneNode(true);
       clone
-        .querySelectorAll('label, input, [role="radio"], [role="option"], .quiz-option, .option-card, table')
+        .querySelectorAll('label, input, [role="radio"], [role="option"], .quiz-option, .option-card, table, style, script')
         .forEach((n) => n.remove());
       if (optIds.size > 0) {
         clone.querySelectorAll('[data-lms-auto-id]').forEach((n) => {
@@ -3195,7 +3370,7 @@ const LMSScanner = {
           }
         });
       }
-      basePrompt = this.cleanText(clone.innerText || clone.textContent || '').slice(0, 900) || 'Pertanyaan Pilihan Ganda';
+      basePrompt = this.getElementText(clone).slice(0, 900) || 'Pertanyaan Pilihan Ganda';
     }
 
     const fullPrompt = tableSummaryText ? `${basePrompt} ${tableSummaryText}` : basePrompt;
@@ -3350,7 +3525,7 @@ const LMSScanner = {
     simulations.forEach((s) => s.runButtons.forEach((rb) => runBtnIds.add(rb.id)));
 
     const rawClickables = this.queryAllDeep(
-      'button, a, input[type="submit"], input[type="button"], [role="button"], .next-step, [class*="next"], [class*="nav"], [class*="continue"], div, span'
+      'button, a, input[type="submit"], input[type="button"], [role="button"], [data-acc-text], .slide-object, .acc-element, .next-step, [class*="next"], [class*="nav"], [class*="continue"], div, span'
     ).filter((el) => {
       if (!this.isVisible(el) || el.disabled) return false;
       if (this.isInsideSidebarOrHeader(el) || this.isResourceOrExternalLink(el)) return false;
@@ -3358,7 +3533,7 @@ const LMSScanner = {
       if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT' || el.getAttribute('role') === 'button') {
         return true;
       }
-      // Untuk elemen div/span, hanya sertakan jika bergaya tombol pill dan bukan wrapper dari banyak tombol
+      // Untuk elemen div/span/.slide-object, hanya sertakan jika bergaya tombol pill dan bukan wrapper dari banyak tombol
       const win = el.ownerDocument?.defaultView || window;
       const style = win.getComputedStyle(el);
       return (style.cursor === 'pointer' || this.hasVisualPillStyle(el)) && !this.isTileWrapper(el);
@@ -3371,7 +3546,7 @@ const LMSScanner = {
           (other) =>
             other !== el &&
             el.contains(other) &&
-            this.cleanText(other.innerText || '') === this.cleanText(el.innerText || '')
+            this.getElementText(other) === this.getElementText(el)
         )
     );
 
@@ -3388,7 +3563,7 @@ const LMSScanner = {
         const customSub = document.querySelector(customSelectors.submitButton);
         if (customSub && this.isVisible(customSub)) {
           submitButtonId = this.tagElement(customSub, 'nav-submit');
-          submitButtonLabel = this.cleanText(customSub.innerText || customSub.value || 'Submit');
+          submitButtonLabel = this.getElementText(customSub) || 'Submit';
           submitButtonIds.push({ id: submitButtonId, label: submitButtonLabel });
         }
       } catch {}
@@ -3399,7 +3574,7 @@ const LMSScanner = {
         const customNext = document.querySelector(customSelectors.nextButton);
         if (customNext && this.isVisible(customNext)) {
           nextButtonId = this.tagElement(customNext, 'nav-next');
-          nextButtonLabel = this.cleanText(customNext.innerText || customNext.value || 'Next');
+          nextButtonLabel = this.getElementText(customNext) || 'Next';
         }
       } catch {}
     }
@@ -3411,7 +3586,7 @@ const LMSScanner = {
       ).find((el) => this.isVisible(el) && !el.disabled && el.getAttribute('data-lms-nav-visited') !== 'true');
       if (riseQuizNext) {
         nextButtonId = this.tagElement(riseQuizNext, 'nav-rise-qnext');
-        nextButtonLabel = this.cleanText(riseQuizNext.innerText || 'Next Question');
+        nextButtonLabel = this.getElementText(riseQuizNext) || 'Next Question';
         isCarouselNext = true;
       }
     }
@@ -3423,7 +3598,7 @@ const LMSScanner = {
       ).find((el) => this.isVisible(el) && !el.disabled && el.getAttribute('data-lms-nav-visited') !== 'true');
       if (canvasFooterNext) {
         nextButtonId = this.tagElement(canvasFooterNext, 'nav-canvas-next');
-        nextButtonLabel = this.cleanText(canvasFooterNext.innerText || canvasFooterNext.getAttribute('aria-label') || 'Next ›');
+        nextButtonLabel = this.getElementText(canvasFooterNext) || 'Next ›';
       }
     }
 
@@ -3437,20 +3612,29 @@ const LMSScanner = {
       if (existingId && runBtnIds.has(existingId)) continue;
       if (this.isActionPromptElement(el, customSelectors)) continue;
 
-      const text = this.cleanText(
-        el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || ''
-      );
+      const text = this.getElementText(el);
       if (!text || text.length > 95) continue;
+      // Jangan anggap tombol "Review Quiz" / "Retry Quiz" / "Take the Quiz Again" sebagai tombol Next
+      if (/\b(again|retake|retry|review\s+quiz|previous|sebelumnya)\b/i.test(text)) continue;
 
       if (
         el.getAttribute('data-lms-completed') !== 'true' &&
-        (el.hasAttribute('data-submit-quiz') || el.id === 'submit_quiz_button' || submitRegex.test(text))
+        (el.hasAttribute('data-submit-quiz') || el.id === 'submit_quiz_button' || el.id === 'submit' || submitRegex.test(text))
       ) {
-        const sId = this.tagElement(el, 'nav-submit');
-        submitButtonIds.push({ id: sId, label: text });
-        if (!submitButtonId) {
-          submitButtonId = sId;
-          submitButtonLabel = text;
+        const r = el.getBoundingClientRect();
+        const alreadyAddedAtSpot = submitButtonIds.some((sub) => {
+          const sEl = this.getElementById(sub.id);
+          if (!sEl) return false;
+          const sr = sEl.getBoundingClientRect();
+          return Math.abs(sr.top - r.top) <= 18 && Math.abs(sr.left - r.left) <= 18;
+        });
+        if (!alreadyAddedAtSpot) {
+          const sId = this.tagElement(el, 'nav-submit');
+          submitButtonIds.push({ id: sId, label: text });
+          if (!submitButtonId) {
+            submitButtonId = sId;
+            submitButtonLabel = text;
+          }
         }
         continue;
       }

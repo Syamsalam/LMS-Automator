@@ -744,10 +744,26 @@ KEMBALIKAN HANYA JSON VALID DENGAN SKEMA BERIKUT:
       });
 
       scored.sort((a, b) => b.score - a.score);
-      const selectedOptionIds =
-        q.inputType === 'checkbox'
-          ? scored.filter((s) => s.score >= scored[0].score * 0.7 && s.score > 0).map((s) => s.id)
-          : [scored[0].id];
+
+      // Deteksi apakah soal meminta memilih 2 atau 3 jawaban (misal "(Select TWO.)" atau "Choose two." pada AWS Knowledge Check)
+      const asksForThree = /\b(?:select|choose|pick|pilih)\s+(?:three|3|tiga)\b/i.test(rawQText);
+      const asksForTwo = /\b(?:select|choose|pick|pilih)\s+(?:two|2|dua)\b/i.test(rawQText);
+      const targetMultiCount = asksForThree ? 3 : asksForTwo ? 2 : 0;
+
+      let selectedOptionIds = [];
+      if (targetMultiCount > 0) {
+        selectedOptionIds = scored.slice(0, Math.min(targetMultiCount, scored.length)).map((s) => s.id);
+      } else if (q.inputType === 'checkbox') {
+        selectedOptionIds = scored
+          .filter((s) => s.score >= scored[0].score * 0.7 && s.score > 0)
+          .slice(0, 3)
+          .map((s) => s.id);
+        if (selectedOptionIds.length === 0) {
+          selectedOptionIds = scored.slice(0, Math.min(2, scored.length)).map((s) => s.id);
+        }
+      } else {
+        selectedOptionIds = [scored[0].id];
+      }
 
       if (selectedOptionIds.length === 0 && options[0]) {
         selectedOptionIds.push(options[0].id);

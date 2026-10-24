@@ -124,14 +124,15 @@ const LMSExecutor = {
   },
 
   /**
-   * Simulasikan rangkaian event klik manusia (kompatibel dengan React synthetic events & event listener standar, termasuk lintas iframe)
+   * Simulasikan rangkaian event klik manusia (kompatibel dengan React synthetic events, Articulate Storyline 360 SVG/Canvas, & lintas iframe)
    */
   async clickElement(el, highlightColor = '#3b82f6') {
     if (!el) return false;
     await this.scrollIntoViewSafe(el);
     this.highlightElement(el, highlightColor, 850);
 
-    const win = el.ownerDocument?.defaultView || window;
+    const doc = el.ownerDocument || document;
+    const win = doc.defaultView || window;
     const rect = el.getBoundingClientRect();
     const clientX = rect.left + rect.width / 2;
     const clientY = rect.top + rect.height / 2;
@@ -142,27 +143,35 @@ const LMSExecutor = {
       composed: true,
       view: win,
       clientX,
-      clientY
+      clientY,
+      button: 0,
+      buttons: 1
     };
 
-    try {
-      const PtrEv = win.PointerEvent || PointerEvent;
-      const MseEv = win.MouseEvent || MouseEvent;
-      el.dispatchEvent(new PtrEv('pointerover', eventInit));
-      el.dispatchEvent(new MseEv('mouseover', eventInit));
-      el.dispatchEvent(new PtrEv('pointerdown', eventInit));
-      el.dispatchEvent(new MseEv('mousedown', eventInit));
-      if (typeof el.focus === 'function') {
-        el.focus({ preventScroll: true });
+    const dispatchPointerAndMouse = (target) => {
+      if (!target) return;
+      try {
+        const PtrEv = win.PointerEvent || PointerEvent;
+        const MseEv = win.MouseEvent || MouseEvent;
+        target.dispatchEvent(new PtrEv('pointerover', eventInit));
+        target.dispatchEvent(new PtrEv('pointerenter', eventInit));
+        target.dispatchEvent(new MseEv('mouseover', eventInit));
+        target.dispatchEvent(new MseEv('mouseenter', eventInit));
+        target.dispatchEvent(new PtrEv('pointerdown', eventInit));
+        target.dispatchEvent(new MseEv('mousedown', eventInit));
+        if (typeof target.focus === 'function') {
+          target.focus({ preventScroll: true });
+        }
+        target.dispatchEvent(new PtrEv('pointerup', { ...eventInit, buttons: 0 }));
+        target.dispatchEvent(new MseEv('mouseup', { ...eventInit, buttons: 0 }));
+      } catch {
+        // Abaikan jika browser membatasi konstruktor PointerEvent lintas frame
       }
-      el.dispatchEvent(new PtrEv('pointerup', eventInit));
-      el.dispatchEvent(new MseEv('mouseup', eventInit));
-    } catch {
-      // Abaikan jika browser membatasi konstruktor PointerEvent lintas frame
-    }
+    };
+
+    dispatchPointerAndMouse(el);
 
     // Jika elemen adalah <label> yang membungkus input radio/checkbox, klik input atau label dengan tepat
-    const doc = el.ownerDocument || document;
     const linkedInput =
       (el.querySelector && el.querySelector('input[type="radio"], input[type="checkbox"]')) ||
       doc.querySelector(`[data-lms-auto-input-for="${CSS.escape(el.getAttribute('data-lms-auto-id') || '')}"]`);
@@ -177,8 +186,28 @@ const LMSExecutor = {
       el.click();
     } else {
       const MseEv = win.MouseEvent || MouseEvent;
-      el.dispatchEvent(new MseEv('click', eventInit));
+      el.dispatchEvent(new MseEv('click', { ...eventInit, buttons: 0 }));
     }
+
+    // Untuk Articulate Storyline 360 / SVG Canvas player:
+    // Pastikan elemen teratas pada koordinat (clientX, clientY) seperti <svg><path> / .event-layer / .acc-element juga menerima event klik!
+    try {
+      const pointEl = doc.elementFromPoint ? doc.elementFromPoint(clientX, clientY) : null;
+      if (
+        pointEl &&
+        pointEl !== el &&
+        pointEl !== linkedInput &&
+        !(pointEl.closest && pointEl.closest('#lms-autopilot-hud-host'))
+      ) {
+        dispatchPointerAndMouse(pointEl);
+        if (typeof pointEl.click === 'function') {
+          pointEl.click();
+        } else {
+          const MseEv = win.MouseEvent || MouseEvent;
+          pointEl.dispatchEvent(new MseEv('click', { ...eventInit, buttons: 0 }));
+        }
+      }
+    } catch {}
 
     return true;
   },
@@ -1122,8 +1151,8 @@ const LMSExecutor = {
       return true;
     }
 
-    // Untuk soal checkbox (multi-select), klik semua opsi terpilih
-    if (mcqScan.inputType === 'checkbox' && selectedIds.length > 1) {
+    // Untuk soal multi-select (checkbox atau soal dengan instruksi "Select TWO" / "Choose two"), klik semua opsi terpilih
+    if (selectedIds.length > 1) {
       for (const optId of selectedIds) {
         const optEl = window.LMSScanner.getElementById(optId);
         if (!optEl) continue;

@@ -36,15 +36,14 @@ const LMSAutoPilot = {
   },
 
   /**
-   * Cek apakah halaman utama (`window.top`) memiliki cross-origin iframe aktif yang berukuran besar
-   * (seperti SCORM / Articulate Rise / Knowledge Check / Lab Player pada AWS Academy Canvas, AWS Skill Builder, atau NetAcad)
+   * Cek apakah frame saat ini memiliki cross-origin iframe aktif yang berukuran besar
+   * (seperti SCORM / Articulate Storyline 360 / Rise 360 / Knowledge Check / Lab Player pada AWS Academy Canvas atau NetAcad)
    */
   hasActiveCrossOriginContentIframe() {
-    if (window !== window.top) return false;
     return window.LMSScanner.queryAllDeep('iframe').some((f) => {
       if (!window.LMSScanner.isVisible(f)) return false;
       const rect = f.getBoundingClientRect();
-      if (rect.width < 260 || rect.height < 180) return false;
+      if (rect.width < 220 || rect.height < 140) return false;
       try {
         return !f.contentDocument;
       } catch {
@@ -54,13 +53,34 @@ const LMSAutoPilot = {
   },
 
   /**
-   * Tunggu hingga cross-origin iframe (seperti `#tool_content` di AWS Academy Canvas) selesai memproses
-   * video / Knowledge Check, atau lanjutkan setelah jeda singkat jika iframe hanya berisi bacaan/PDF statis.
+   * Cek apakah frame saat ini memiliki same-origin child iframe berukuran besar
+   * (misal wrapper SCORM `indexAPI.html` yang membungkus `story.html`)
+   */
+  hasActiveSameOriginChildIframe() {
+    return Array.from(document.querySelectorAll('iframe, frame')).some((f) => {
+      const rect = f.getBoundingClientRect();
+      if (rect.width < 220 || rect.height < 140) return false;
+      try {
+        return Boolean(f.contentDocument && f.contentDocument.body);
+      } catch {
+        return false;
+      }
+    });
+  },
+
+  /**
+   * Tunggu hingga cross-origin iframe (seperti `#tool_content` / Articulate Storyline Knowledge Check di AWS Academy Canvas)
+   * selesai memproses tombol Start, video, atau 10 soal Knowledge Check.
    */
   async waitForCrossOriginIframe(config) {
     const startWait = Date.now();
-    const idleGraceMs = Math.max(Number(config.pageLoadDelay) || 1500, 3200);
-    const maxTotalWaitMs = 90000;
+    const pageHeaderTxt = `${document.title || ''} ${document.querySelector('h1, h2, .page-title')?.innerText || ''}`;
+    const isKnowledgeCheckOrQuizPage = /\b(knowledge\s*check|quiz|assessment|exam|survey)\b/i.test(pageHeaderTxt);
+
+    const idleGraceMs = isKnowledgeCheckOrQuizPage
+      ? 14000
+      : Math.max(Number(config.pageLoadDelay) || 1500, 6000);
+    const maxTotalWaitMs = isKnowledgeCheckOrQuizPage ? 240000 : 95000;
 
     while (Date.now() - startWait < maxTotalWaitMs) {
       if (await this.checkShouldAbort()) return false;
@@ -74,9 +94,9 @@ const LMSAutoPilot = {
       }
 
       const lastBusy = st.lastIframeBusyAt || 0;
-      const isIframeActivelyWorking = lastBusy > 0 && Date.now() - lastBusy < 6500;
+      const isIframeActivelyWorking = lastBusy > 0 && Date.now() - lastBusy < 9500;
 
-      // Jika setelah 3.2 detik sub-iframe tidak melaporkan aktivitas tugas (misal hanya berisi dokumen/PDF/slide statis),
+      // Jika setelah batas waktu tunggu sub-iframe tidak lagi melaporkan aktivitas tugas,
       // lanjutkan agar halaman induk Canvas dapat menekan tombol "Next ›" di bagian bawah halaman!
       if (!isIframeActivelyWorking && Date.now() - startWait >= idleGraceMs) {
         return true;
@@ -87,21 +107,17 @@ const LMSAutoPilot = {
   },
 
   async init() {
-    // Jika berada di dalam sub-frame:
-    // 1. Abaikan iframe tersembunyi / tracker berukuran kecil (< 200x120)
-    // 2. Jika same-origin terhadap parent, biarkan parent yang memindai melalui queryAllDeep
+    // Jika berada di dalam sub-frame yang same-origin dengan window.top (halaman utama),
+    // biarkan window.top yang memindai melalui queryAllDeep.
+    // Namun jika cross-origin terhadap window.top (seperti iframe LTI / SCORM / Articulate Storyline 360 di AWS Academy),
+    // WAJIB jalankan init() meskipun ukuran awal iframe saat loading masih kecil!
     if (window !== window.top) {
-      const fw = window.innerWidth || document.documentElement?.clientWidth || 0;
-      const fh = window.innerHeight || document.documentElement?.clientHeight || 0;
-      if (fw < 200 || fh < 120) {
-        return;
-      }
       try {
-        if (window.parent && window.parent !== window && window.parent.document) {
+        if (window.top && window.top.document) {
           return;
         }
       } catch {
-        // Cross-origin content iframe berukuran penuh: tetap aktifkan listener untuk mengeksekusi tugas di dalam frame ini
+        // Cross-origin terhadap window.top: lanjutkan inisialisasi di frame ini
       }
     }
 
@@ -333,16 +349,26 @@ const LMSAutoPilot = {
    */
   async runCycle() {
     if (this.isExecutingCycle) return;
+
+    // Jika berada di dalam sub-iframe berukuran sangat kecil (misal tracker / pixel tersembunyi), abaikan sepenuhnya!
+    if (window !== window.top) {
+      const fw = window.innerWidth || document.documentElement?.clientWidth || 0;
+      const fh = window.innerHeight || document.documentElement?.clientHeight || 0;
+      if (fw < 160 || fh < 100) {
+        return;
+      }
+    }
+
     this.isExecutingCycle = true;
 
     try {
       const config = await window.LMSStorage.getConfig();
-      const initialScan = window.LMSScanner.scanPage(config);
+      let initialScan = window.LMSScanner.scanPage(config);
       if (window === window.top) {
         window.LMSHud.updateScanSummary(initialScan.summary);
       }
 
-      const initialTotalTasks =
+      let initialTotalTasks =
         initialScan.summary.simulationCount +
         initialScan.summary.mcqCount +
         initialScan.summary.essayCount;
@@ -383,14 +409,58 @@ const LMSAutoPilot = {
         }
       }
 
-      // KASUS KHUSUS 2: Halaman utama (`window.top`) memiliki cross-origin iframe aktif (seperti `#tool_content` di AWS Academy Canvas atau NetAcad)
-      // Tunggu hingga sub-iframe menyelesaikan video / Knowledge Check, lalu lanjutkan ke tombol `Next ›` di halaman induk!
-      if (window === window.top && initialTotalTasks === 0 && this.hasActiveCrossOriginContentIframe()) {
-        const iframeDone = await this.waitForCrossOriginIframe(config);
-        if (!iframeDone) return;
+      // KASUS KHUSUS 2: Jika frame ini adalah wrapper luar yang memiliki cross-origin child iframe aktif
+      // (seperti Canvas `window.top` atau SCORM LTI wrapper yang membungkus Articulate Storyline Knowledge Check),
+      // tunggu hingga child iframe menyelesaikan tombol Start, video, atau Knowledge Check!
+      if (initialTotalTasks === 0 && this.hasActiveCrossOriginContentIframe()) {
+        if (window === window.top) {
+          const iframeDone = await this.waitForCrossOriginIframe(config);
+          if (!iframeDone) return;
+        } else {
+          // Jika ini frame perantara (bukan window.top) yang membungkus cross-origin child iframe, biarkan child iframe yang bekerja!
+          return;
+        }
       }
 
-      // Jika di dalam frame ini tidak ada tugas sama sekali dan tidak ada tombol navigasi:
+      // KASUS KHUSUS 3: Di dalam sub-iframe (misal Articulate Storyline 360 / Rise 360 / LTI External Tool),
+      // player sering kali memuat tombol "Start" atau slide soal secara asinkron 1..6 detik setelah document_idle.
+      // Tunggu & pindai ulang secara berkala sebelum menyatakan iframe kosong!
+      if (
+        window !== window.top &&
+        initialTotalTasks === 0 &&
+        !initialScan.navigation.submitButtonId &&
+        !initialScan.navigation.nextButtonId
+      ) {
+        const looksLikeCoursePlayer =
+          Boolean(
+            document.querySelector(
+              '#preso, #slide, .slide-container, .frame-wrap, #app, .rise-player, video, iframe, canvas, svg'
+            )
+          ) || /\b(story|scorm|lti|quiz|knowledge|module|rise|player)\b/i.test(`${window.location.href} ${document.title}`);
+
+        if (looksLikeCoursePlayer) {
+          await window.LMSStorage.updateState({ lastIframeBusyAt: Date.now() });
+          for (let waitPoll = 0; waitPoll < 12; waitPoll++) {
+            if (await this.checkShouldAbort()) return;
+            await window.LMSExecutor.sleep(600);
+            initialScan = window.LMSScanner.scanPage(config);
+            initialTotalTasks =
+              initialScan.summary.simulationCount +
+              initialScan.summary.mcqCount +
+              initialScan.summary.essayCount;
+            if (
+              initialTotalTasks > 0 ||
+              initialScan.navigation.submitButtonId ||
+              initialScan.navigation.nextButtonId
+            ) {
+              await window.LMSStorage.updateState({ lastIframeBusyAt: Date.now() });
+              break;
+            }
+          }
+        }
+      }
+
+      // Jika di dalam frame ini tetap tidak ada tugas sama sekali dan tidak ada tombol navigasi:
       // Coba scroll sekali; jika tetap kosong dan ini sub-iframe, beri sinyal NAVIGATE_READY ke halaman induk!
       if (
         initialTotalTasks === 0 &&
@@ -399,7 +469,7 @@ const LMSAutoPilot = {
       ) {
         const scrolledOnce = await window.LMSExecutor.scrollPageDown();
         if (!scrolledOnce) {
-          if (window !== window.top) {
+          if (window !== window.top && !this.hasActiveCrossOriginContentIframe()) {
             await window.LMSStorage.updateState({
               currentPhase: 'NAVIGATE_READY',
               lastIframeReadyAt: Date.now(),
@@ -630,6 +700,13 @@ const LMSAutoPilot = {
               if (answered) {
                 stats.mcqAnswered = (stats.mcqAnswered || 0) + 1;
                 await window.LMSStorage.updateState({ stats });
+                // Pastikan tombol Submit/Continue yang persisten di player (seperti Articulate Storyline 360) dapat diklik kembali untuk soal ini!
+                window.LMSScanner.queryAllDeep('[data-lms-auto-id^="lms-nav-submit-"]').forEach((b) =>
+                  b.removeAttribute('data-lms-completed')
+                );
+                window.LMSScanner.queryAllDeep('[data-lms-auto-id^="lms-nav-next-"]').forEach((b) =>
+                  b.removeAttribute('data-lms-nav-visited')
+                );
               }
             }
 
