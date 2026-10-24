@@ -73,6 +73,11 @@ async function handleMessage(message) {
       return { tabId: null };
     }
 
+    case 'EXECUTE_AWS_LAB_PLAN': {
+      const config = await self.LMSStorage.getConfig();
+      return await self.LMSAIClient.executeAWSLabPlan(payload || {}, config);
+    }
+
     default:
       throw new Error(`Tipe pesan tidak dikenali: ${type}`);
   }

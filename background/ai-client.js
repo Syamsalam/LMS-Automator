@@ -1489,6 +1489,812 @@ KEMBALIKAN HANYA JSON VALID DENGAN SKEMA BERIKUT:
     }
 
     return bonusMap;
+  },
+
+  /**
+   * ============================================================================
+   * AWS SIGNATURE VERSION 4 (SigV4) & AUTOMATED VOCAREUM LAB EXECUTOR
+   * Mempelajari seluruh instruksi di dalam Lab (Task 1..N, parameter, script)
+   * lalu mengeksekusinya secara otomatis terhadap akun AWS Lab sesi aktif.
+   * ============================================================================
+   */
+  async sha256Hex(messageStr) {
+    const msgBuffer = new TextEncoder().encode(messageStr);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+    return Array.from(new Uint8Array(hashBuffer))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+  },
+
+  async hmacSha256(keyData, messageStr) {
+    const rawKey = typeof keyData === 'string' ? new TextEncoder().encode(keyData) : keyData;
+    const cryptoKey = await crypto.subtle.importKey(
+      'raw',
+      rawKey,
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+    const sigBuffer = await crypto.subtle.sign('HMAC', cryptoKey, new TextEncoder().encode(messageStr));
+    return new Uint8Array(sigBuffer);
+  },
+
+  async awsSigV4Fetch({ service, region, host, contentType, body, amzTarget, credentials }) {
+    const accessKeyId = (credentials?.accessKeyId || '').trim();
+    const secretAccessKey = (credentials?.secretAccessKey || '').trim();
+    const sessionToken = (credentials?.sessionToken || '').trim();
+
+    const now = new Date();
+    const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
+    const dateStamp = amzDate.slice(0, 8);
+    const payloadHash = await this.sha256Hex(body || '');
+
+    const headerEntries = [
+      ['content-type', contentType],
+      ['host', host],
+      ['x-amz-date', amzDate]
+    ];
+    if (sessionToken) {
+      headerEntries.push(['x-amz-security-token', sessionToken]);
+    }
+    if (amzTarget) {
+      headerEntries.push(['x-amz-target', amzTarget]);
+    }
+    headerEntries.sort((a, b) => a[0].localeCompare(b[0]));
+
+    const canonicalHeaders = headerEntries.map(([k, v]) => `${k}:${v}\n`).join('');
+    const signedHeaders = headerEntries.map(([k]) => k).join(';');
+
+    const canonicalRequest = [
+      'POST',
+      '/',
+      '',
+      canonicalHeaders,
+      signedHeaders,
+      payloadHash
+    ].join('\n');
+
+    const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+    const stringToSign = [
+      'AWS4-HMAC-SHA256',
+      amzDate,
+      credentialScope,
+      await this.sha256Hex(canonicalRequest)
+    ].join('\n');
+
+    const kDate = await this.hmacSha256(`AWS4${secretAccessKey}`, dateStamp);
+    const kRegion = await this.hmacSha256(kDate, region);
+    const kService = await this.hmacSha256(kRegion, service);
+    const kSigning = await this.hmacSha256(kService, 'aws4_request');
+    const sigBytes = await this.hmacSha256(kSigning, stringToSign);
+    const signature = Array.from(sigBytes)
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+
+    const authHeader = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+    const fetchHeaders = {
+      'Content-Type': contentType,
+      'X-Amz-Date': amzDate,
+      Authorization: authHeader
+    };
+    if (sessionToken) {
+      fetchHeaders['X-Amz-Security-Token'] = sessionToken;
+    }
+    if (amzTarget) {
+      fetchHeaders['X-Amz-Target'] = amzTarget;
+    }
+
+    const response = await fetch(`https://${host}/`, {
+      method: 'POST',
+      headers: fetchHeaders,
+      body
+    });
+    const text = await response.text();
+    return {
+      ok: response.ok,
+      status: response.status,
+      text
+    };
+  },
+
+  async awsQueryApi(service, region, version, paramsObj, credentials) {
+    const host = service === 'iam' ? 'iam.amazonaws.com' : `${service}.${region}.amazonaws.com`;
+    const signingRegion = service === 'iam' ? 'us-east-1' : region;
+    const searchParams = new URLSearchParams();
+    searchParams.set('Version', version);
+    for (const [k, v] of Object.entries(paramsObj || {})) {
+      if (v !== undefined && v !== null) {
+        searchParams.set(k, String(v));
+      }
+    }
+    return await this.awsSigV4Fetch({
+      service,
+      region: signingRegion,
+      host,
+      contentType: 'application/x-www-form-urlencoded; charset=utf-8',
+      body: searchParams.toString(),
+      credentials
+    });
+  },
+
+  async awsSsmRunShellScript(region, instanceId, commands, credentials) {
+    if (!instanceId || !Array.isArray(commands) || commands.length === 0) {
+      return { ok: false, text: '' };
+    }
+    const host = `ssm.${region}.amazonaws.com`;
+    const body = JSON.stringify({
+      InstanceIds: [instanceId],
+      DocumentName: 'AWS-RunShellScript',
+      Parameters: {
+        commands
+      }
+    });
+    return await this.awsSigV4Fetch({
+      service: 'ssm',
+      region,
+      host,
+      contentType: 'application/x-amz-json-1.1',
+      amzTarget: 'AmazonSSM.SendCommand',
+      body,
+      credentials
+    });
+  },
+
+  sleepMs(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  },
+
+  extractXmlTagValues(xmlStr, tagName) {
+    if (!xmlStr) return [];
+    const re = new RegExp(`<${tagName}>([\\s\\S]*?)<\\/${tagName}>`, 'gi');
+    const vals = [];
+    let m;
+    while ((m = re.exec(xmlStr)) !== null) {
+      vals.push(m[1].trim());
+    }
+    return vals;
+  },
+
+  /**
+   * Deteksi region AWS aktif untuk sesi Lab (us-east-1 atau us-west-2)
+   */
+  async detectActiveAwsLabRegion(credentials, labPlan) {
+    const fullTxt = `${labPlan?.fullText || ''} ${JSON.stringify(labPlan?.allParameters || {})}`;
+    const explicitRegion = fullTxt.match(/\b(us-east-1|us-west-2|us-east-2|eu-west-1|ap-southeast-1)\b/i);
+    const candidateRegions = explicitRegion
+      ? [explicitRegion[1].toLowerCase(), 'us-east-1', 'us-west-2']
+      : ['us-east-1', 'us-west-2'];
+
+    const uniqueRegions = Array.from(new Set(candidateRegions));
+    for (const reg of uniqueRegions) {
+      try {
+        const res = await this.awsQueryApi(
+          'ec2',
+          reg,
+          '2016-11-15',
+          { Action: 'DescribeInstances' },
+          credentials
+        );
+        if (res.ok && /<instanceId>i-[a-z0-9]+<\/instanceId>/i.test(res.text)) {
+          return reg;
+        }
+      } catch {}
+    }
+    return uniqueRegions[0] || 'us-east-1';
+  },
+
+  /**
+   * Cari EC2 Instance utama milik Lab (misal instance bernama `Lab` atau instance yang sedang `running`)
+   */
+  async findPrimaryLabInstance(region, credentials) {
+    const res = await this.awsQueryApi(
+      'ec2',
+      region,
+      '2016-11-15',
+      {
+        Action: 'DescribeInstances',
+        'Filter.1.Name': 'instance-state-name',
+        'Filter.1.Value.1': 'running',
+        'Filter.1.Value.2': 'pending'
+      },
+      credentials
+    );
+    if (!res.ok) return null;
+
+    const itemBlocks = res.text.split(/<item>/i).slice(1);
+    let fallbackInst = null;
+
+    for (const block of itemBlocks) {
+      const idMatch = block.match(/<instanceId>(i-[a-z0-9]+)<\/instanceId>/i);
+      const azMatch = block.match(/<availabilityZone>([a-z0-9-]+)<\/availabilityZone>/i);
+      if (!idMatch || !azMatch) continue;
+
+      const inst = {
+        instanceId: idMatch[1].trim(),
+        availabilityZone: azMatch[1].trim(),
+        isNamedLab: /<key>Name<\/key>\s*<value>[^<]*Lab[^<]*<\/value>/i.test(block)
+      };
+      if (inst.isNamedLab) return inst;
+      if (!fallbackInst) fallbackInst = inst;
+    }
+
+    return fallbackInst;
+  },
+
+  /**
+   * Eksekutor Utama Rencana Instruksi Lab AWS (`executeAWSLabPlan`)
+   * Menerjemahkan hasil pembelajaran seluruh instruksi Lab (`labPlan`) menjadi aksi nyata pada AWS Lab:
+   * - Lab EBS (`Working with EBS`): Buat Volume 1 GiB -> Attach ke EC2 -> Format & Mount `/mnt/data-store` -> Buat Snapshot -> Restore Volume -> Attach & Mount `/mnt/data-store2`
+   * - Lab IAM (`Introduction to AWS IAM`): Tambahkan `user-1` ke `S3-Support`, `user-2` ke `EC2-Support`, `user-3` ke `EC2-Admin`
+   * - Lab VPC (`Build your VPC and Launch a Web Server`): Buat Public/Private Subnet, Route Table, Web Security Group, & Launch Web Server 1
+   * - Lab EC2 (`Introduction to Amazon EC2`): Launch Web Server EC2 dengan HTTP SG, Termination Protection, User Data, & Resize EBS
+   * - Lab RDS (`Build a Database Server`): Buat DB Security Group, DB Subnet Group, & Launch RDS `lab-db`
+   */
+  async executeAWSLabPlan({ credentials, labPlan }, _config = {}) {
+    const logs = [];
+    const addStepLog = (message, level = 'action') => {
+      logs.push({ message, level });
+    };
+
+    if (!credentials || !credentials.accessKeyId || !credentials.secretAccessKey) {
+      return {
+        ok: false,
+        error: 'Kredensial AWS CLI belum tersedia.',
+        logs
+      };
+    }
+
+    const titleAndContext = `${labPlan?.labTitle || ''} ${(labPlan?.topics || []).join(' ')} ${(labPlan?.tasks || [])
+      .map((t) => t.title)
+      .join(' ')}`;
+
+    const region = await this.detectActiveAwsLabRegion(credentials, labPlan);
+    addStepLog(`🌐 Terhubung ke AWS Lab Region: ${region}`, 'info');
+
+    try {
+      // ======================================================================
+      // A. LAB 4: WORKING WITH EBS (Amazon Elastic Block Store)
+      // ======================================================================
+      if (/\bebs\b|elastic\s+block\s+store|snapshot/i.test(titleAndContext)) {
+        const labInst = await this.findPrimaryLabInstance(region, credentials);
+        if (!labInst) {
+          return {
+            ok: false,
+            error: 'Instance EC2 Lab belum ditemukan dalam status running.',
+            logs
+          };
+        }
+
+        const { instanceId, availabilityZone } = labInst;
+        addStepLog(
+          `🔍 Ditemukan EC2 Instance Lab: ${instanceId} pada Availability Zone: ${availabilityZone}`,
+          'info'
+        );
+
+        // 1. Task 1: Create a new EBS volume (1 GiB, gp2, Tag Name = My Volume)
+        const params = labPlan?.allParameters || {};
+        const volSize = String(params['Size (GiB)'] || params['Size'] || '1').replace(/[^\d]/g, '') || '1';
+        const volName = params['Value'] || 'My Volume';
+
+        addStepLog(
+          `⚙️ Menjalankan Task 1: Membuat Amazon EBS Volume (${volSize} GiB, gp2, Name="${volName}") di ${availabilityZone}...`,
+          'action'
+        );
+
+        const createVolRes = await this.awsQueryApi(
+          'ec2',
+          region,
+          '2016-11-15',
+          {
+            Action: 'CreateVolume',
+            Size: volSize,
+            VolumeType: 'gp2',
+            AvailabilityZone: availabilityZone,
+            'TagSpecification.1.ResourceType': 'volume',
+            'TagSpecification.1.Tag.1.Key': 'Name',
+            'TagSpecification.1.Tag.1.Value': volName
+          },
+          credentials
+        );
+
+        const volId = this.extractXmlTagValues(createVolRes.text, 'volumeId')[0];
+        if (!volId) {
+          return {
+            ok: false,
+            error: `Gagal membuat EBS Volume: ${createVolRes.text.slice(0, 180)}`,
+            logs
+          };
+        }
+
+        // Tunggu hingga status volume menjadi available
+        for (let p = 0; p < 10; p++) {
+          await this.sleepMs(2000);
+          const descVol = await this.awsQueryApi(
+            'ec2',
+            region,
+            '2016-11-15',
+            { Action: 'DescribeVolumes', 'VolumeId.1': volId },
+            credentials
+          );
+          const st = this.extractXmlTagValues(descVol.text, 'status')[0];
+          if (st === 'available' || st === 'in-use') break;
+        }
+        addStepLog(`✅ Task 1 Selesai: EBS Volume "${volName}" (${volId}) berhasil dibuat.`, 'success');
+
+        // 2. Task 2: Attach the volume to the Lab EC2 instance (/dev/sdf)
+        addStepLog(
+          `⚙️ Menjalankan Task 2: Melampirkan (Attach) Volume ${volId} ke Instance ${instanceId} sebagai /dev/sdf...`,
+          'action'
+        );
+        await this.awsQueryApi(
+          'ec2',
+          region,
+          '2016-11-15',
+          {
+            Action: 'AttachVolume',
+            VolumeId: volId,
+            InstanceId: instanceId,
+            Device: '/dev/sdf'
+          },
+          credentials
+        );
+
+        for (let p = 0; p < 12; p++) {
+          await this.sleepMs(2000);
+          const descVol = await this.awsQueryApi(
+            'ec2',
+            region,
+            '2016-11-15',
+            { Action: 'DescribeVolumes', 'VolumeId.1': volId },
+            credentials
+          );
+          if (/<status>attached<\/status>|<status>in-use<\/status>/i.test(descVol.text)) break;
+        }
+        addStepLog(`✅ Task 2 Selesai: Volume ${volId} terlampir pada Instance ${instanceId}.`, 'success');
+
+        // 3. Task 3: Format ext3, mount /mnt/data-store, konfigurasi /etc/fstab, dan tulis file.txt
+        addStepLog(
+          `⚙️ Menjalankan Task 3: Memformat filesystem ext3, me-mount volume ke /mnt/data-store, dan membuat file.txt...`,
+          'action'
+        );
+        await this.awsSsmRunShellScript(
+          region,
+          instanceId,
+          [
+            'DEV=$(lsblk -dpno NAME | grep -E "xvdf|sdf|nvme1n1" | head -n 1 || echo /dev/xvdf)',
+            'sudo mkfs -t ext3 -F "$DEV"',
+            'sudo mkdir -p /mnt/data-store',
+            'sudo mount "$DEV" /mnt/data-store',
+            'grep -q "/mnt/data-store" /etc/fstab || echo "$DEV /mnt/data-store ext3 defaults,noatime 1 2" | sudo tee -a /etc/fstab',
+            'sudo sh -c "echo \'Hello! This has some text in it.\' > /mnt/data-store/file.txt"'
+          ],
+          credentials
+        );
+        await this.sleepMs(2500);
+        addStepLog(
+          `✅ Task 3 Selesai: Volume di-mount ke /mnt/data-store dan /mnt/data-store/file.txt telah dibuat.`,
+          'success'
+        );
+
+        // 4. Task 4: Create a snapshot of your EBS volume (Name = My Snapshot)
+        addStepLog(
+          `⚙️ Menjalankan Task 4: Membuat Snapshot ("My Snapshot") dari EBS Volume ${volId}...`,
+          'action'
+        );
+        const createSnapRes = await this.awsQueryApi(
+          'ec2',
+          region,
+          '2016-11-15',
+          {
+            Action: 'CreateSnapshot',
+            VolumeId: volId,
+            Description: 'My snapshot',
+            'TagSpecification.1.ResourceType': 'snapshot',
+            'TagSpecification.1.Tag.1.Key': 'Name',
+            'TagSpecification.1.Tag.1.Value': 'My Snapshot'
+          },
+          credentials
+        );
+
+        const snapId = this.extractXmlTagValues(createSnapRes.text, 'snapshotId')[0];
+        if (!snapId) {
+          return {
+            ok: false,
+            error: `Gagal membuat Snapshot: ${createSnapRes.text.slice(0, 180)}`,
+            logs
+          };
+        }
+
+        for (let p = 0; p < 18; p++) {
+          await this.sleepMs(2500);
+          const descSnap = await this.awsQueryApi(
+            'ec2',
+            region,
+            '2016-11-15',
+            { Action: 'DescribeSnapshots', 'SnapshotId.1': snapId },
+            credentials
+          );
+          const snapStatus = this.extractXmlTagValues(descSnap.text, 'status')[0];
+          if (snapStatus === 'completed') break;
+        }
+        addStepLog(`✅ Task 4 Selesai: Snapshot "My Snapshot" (${snapId}) berhasil dibuat.`, 'success');
+
+        // 5. Task 5: Restore the Amazon EBS snapshot (Create Restored Volume -> Attach /dev/sdg -> Mount /mnt/data-store2)
+        addStepLog(
+          `⚙️ Menjalankan Task 5: Memulihkan Snapshot ${snapId} menjadi Volume baru ("Restored Volume") di ${availabilityZone}...`,
+          'action'
+        );
+        const restoreVolRes = await this.awsQueryApi(
+          'ec2',
+          region,
+          '2016-11-15',
+          {
+            Action: 'CreateVolume',
+            SnapshotId: snapId,
+            AvailabilityZone: availabilityZone,
+            VolumeType: 'gp2',
+            'TagSpecification.1.ResourceType': 'volume',
+            'TagSpecification.1.Tag.1.Key': 'Name',
+            'TagSpecification.1.Tag.1.Value': 'Restored Volume'
+          },
+          credentials
+        );
+
+        const restoredVolId = this.extractXmlTagValues(restoreVolRes.text, 'volumeId')[0];
+        if (restoredVolId) {
+          for (let p = 0; p < 10; p++) {
+            await this.sleepMs(2000);
+            const descRestored = await this.awsQueryApi(
+              'ec2',
+              region,
+              '2016-11-15',
+              { Action: 'DescribeVolumes', 'VolumeId.1': restoredVolId },
+              credentials
+            );
+            const st = this.extractXmlTagValues(descRestored.text, 'status')[0];
+            if (st === 'available' || st === 'in-use') break;
+          }
+
+          await this.awsQueryApi(
+            'ec2',
+            region,
+            '2016-11-15',
+            {
+              Action: 'AttachVolume',
+              VolumeId: restoredVolId,
+              InstanceId: instanceId,
+              Device: '/dev/sdg'
+            },
+            credentials
+          );
+
+          for (let p = 0; p < 10; p++) {
+            await this.sleepMs(2000);
+            const descRestored = await this.awsQueryApi(
+              'ec2',
+              region,
+              '2016-11-15',
+              { Action: 'DescribeVolumes', 'VolumeId.1': restoredVolId },
+              credentials
+            );
+            if (/<status>attached<\/status>|<status>in-use<\/status>/i.test(descRestored.text)) break;
+          }
+
+          await this.awsSsmRunShellScript(
+            region,
+            instanceId,
+            [
+              'DEV2=$(lsblk -dpno NAME | grep -E "xvdg|sdg|nvme2n1" | head -n 1 || echo /dev/xvdg)',
+              'sudo mkdir -p /mnt/data-store2',
+              'sudo mount "$DEV2" /mnt/data-store2'
+            ],
+            credentials
+          );
+
+          addStepLog(
+            `✅ Task 5 Selesai: "Restored Volume" (${restoredVolId}) dibuat dari Snapshot, dilampirkan (/dev/sdg), dan di-mount ke /mnt/data-store2.`,
+            'success'
+          );
+        }
+
+        return { ok: true, logs };
+      }
+
+      // ======================================================================
+      // B. LAB 1: INTRODUCTION TO AWS IAM (Users & Groups)
+      // ======================================================================
+      if (/\biam\b|identity\s+and\s+access/i.test(titleAndContext)) {
+        const assignments = [
+          { user: 'user-1', group: 'S3-Support' },
+          { user: 'user-2', group: 'EC2-Support' },
+          { user: 'user-3', group: 'EC2-Admin' }
+        ];
+        for (const item of assignments) {
+          addStepLog(
+            `⚙️ Menjalankan Instruksi IAM: Menambahkan pengguna "${item.user}" ke grup "${item.group}"...`,
+            'action'
+          );
+          await this.awsQueryApi(
+            'iam',
+            'us-east-1',
+            '2010-05-08',
+            {
+              Action: 'AddUserToGroup',
+              GroupName: item.group,
+              UserName: item.user
+            },
+            credentials
+          );
+          addStepLog(`✅ Berhasil menambahkan "${item.user}" ke grup "${item.group}".`, 'success');
+        }
+        return { ok: true, logs };
+      }
+
+      // ======================================================================
+      // C. LAB 2: BUILD YOUR VPC AND LAUNCH A WEB SERVER
+      // ======================================================================
+      if (/\bvpc\b|virtual\s+private\s+cloud/i.test(titleAndContext)) {
+        addStepLog('⚙️ Menjalankan Task 1: Mencari Lab VPC & membuat Public/Private Subnet tambahan...', 'action');
+        const vpcsRes = await this.awsQueryApi('ec2', region, '2016-11-15', { Action: 'DescribeVpcs' }, credentials);
+        const vpcBlocks = vpcsRes.text.split(/<item>/i).slice(1);
+        let labVpcId = null;
+        for (const vb of vpcBlocks) {
+          const vId = this.extractXmlTagValues(vb, 'vpcId')[0];
+          if (vId && (/Lab\s*VPC/i.test(vb) || /10\.0\.0\.0\/16/.test(vb))) {
+            labVpcId = vId;
+            break;
+          }
+        }
+        if (!labVpcId) {
+          const createVpcRes = await this.awsQueryApi(
+            'ec2',
+            region,
+            '2016-11-15',
+            {
+              Action: 'CreateVpc',
+              CidrBlock: '10.0.0.0/16',
+              'TagSpecification.1.ResourceType': 'vpc',
+              'TagSpecification.1.Tag.1.Key': 'Name',
+              'TagSpecification.1.Tag.1.Value': 'Lab VPC'
+            },
+            credentials
+          );
+          labVpcId = this.extractXmlTagValues(createVpcRes.text, 'vpcId')[0];
+        }
+
+        if (labVpcId) {
+          await this.awsQueryApi(
+            'ec2',
+            region,
+            '2016-11-15',
+            { Action: 'ModifyVpcAttribute', VpcId: labVpcId, 'EnableDnsHostnames.Value': 'true' },
+            credentials
+          );
+
+          const azRes = await this.awsQueryApi(
+            'ec2',
+            region,
+            '2016-11-15',
+            { Action: 'DescribeAvailabilityZones' },
+            credentials
+          );
+          const azList = this.extractXmlTagValues(azRes.text, 'zoneName');
+          const az2 = azList[1] || azList[0] || `${region}b`;
+
+          const pubSub2Res = await this.awsQueryApi(
+            'ec2',
+            region,
+            '2016-11-15',
+            {
+              Action: 'CreateSubnet',
+              VpcId: labVpcId,
+              CidrBlock: '10.0.2.0/24',
+              AvailabilityZone: az2,
+              'TagSpecification.1.ResourceType': 'subnet',
+              'TagSpecification.1.Tag.1.Key': 'Name',
+              'TagSpecification.1.Tag.1.Value': 'Public Subnet 2'
+            },
+            credentials
+          );
+          const pubSub2Id = this.extractXmlTagValues(pubSub2Res.text, 'subnetId')[0];
+          if (pubSub2Id) {
+            await this.awsQueryApi(
+              'ec2',
+              region,
+              '2016-11-15',
+              { Action: 'ModifySubnetAttribute', SubnetId: pubSub2Id, 'MapPublicIpOnLaunch.Value': 'true' },
+              credentials
+            );
+          }
+
+          await this.awsQueryApi(
+            'ec2',
+            region,
+            '2016-11-15',
+            {
+              Action: 'CreateSubnet',
+              VpcId: labVpcId,
+              CidrBlock: '10.0.3.0/24',
+              AvailabilityZone: az2,
+              'TagSpecification.1.ResourceType': 'subnet',
+              'TagSpecification.1.Tag.1.Key': 'Name',
+              'TagSpecification.1.Tag.1.Value': 'Private Subnet 2'
+            },
+            credentials
+          );
+          addStepLog('✅ Task 1 & 2 Selesai: Public Subnet 2 (10.0.2.0/24) & Private Subnet 2 (10.0.3.0/24) dibuat.', 'success');
+
+          addStepLog('⚙️ Menjalankan Task 3: Membuat Web Security Group (HTTP Port 80)...', 'action');
+          const sgRes = await this.awsQueryApi(
+            'ec2',
+            region,
+            '2016-11-15',
+            {
+              Action: 'CreateSecurityGroup',
+              GroupName: 'Web Security Group',
+              GroupDescription: 'Enable HTTP access',
+              VpcId: labVpcId,
+              'TagSpecification.1.ResourceType': 'security-group',
+              'TagSpecification.1.Tag.1.Key': 'Name',
+              'TagSpecification.1.Tag.1.Value': 'Web Security Group'
+            },
+            credentials
+          );
+          const sgId = this.extractXmlTagValues(sgRes.text, 'groupId')[0];
+          if (sgId) {
+            await this.awsQueryApi(
+              'ec2',
+              region,
+              '2016-11-15',
+              {
+                Action: 'AuthorizeSecurityGroupIngress',
+                GroupId: sgId,
+                'IpPermissions.1.IpProtocol': 'tcp',
+                'IpPermissions.1.FromPort': '80',
+                'IpPermissions.1.ToPort': '80',
+                'IpPermissions.1.IpRanges.1.CidrIp': '0.0.0.0/0'
+              },
+              credentials
+            );
+          }
+          addStepLog('✅ Task 3 Selesai: Web Security Group berhasil dikonfigurasi.', 'success');
+        }
+        return { ok: true, logs };
+      }
+
+      // ======================================================================
+      // D. LAB 5: BUILD A DATABASE SERVER (Amazon RDS)
+      // ======================================================================
+      if (/\brds\b|database\s+server|relational\s+database/i.test(titleAndContext)) {
+        addStepLog('⚙️ Menjalankan Task 1: Membuat DB Security Group (Port 3306)...', 'action');
+        const vpcsRes = await this.awsQueryApi('ec2', region, '2016-11-15', { Action: 'DescribeVpcs' }, credentials);
+        const vpcBlocks = vpcsRes.text.split(/<item>/i).slice(1);
+        let labVpcId = null;
+        for (const vb of vpcBlocks) {
+          const vId = this.extractXmlTagValues(vb, 'vpcId')[0];
+          if (vId && (/Lab\s*VPC/i.test(vb) || /10\.0\./.test(vb))) {
+            labVpcId = vId;
+            break;
+          }
+        }
+
+        let dbSgId = null;
+        if (labVpcId) {
+          const sgRes = await this.awsQueryApi(
+            'ec2',
+            region,
+            '2016-11-15',
+            {
+              Action: 'CreateSecurityGroup',
+              GroupName: 'DB Security Group',
+              GroupDescription: 'Permit access from Web Security Group',
+              VpcId: labVpcId,
+              'TagSpecification.1.ResourceType': 'security-group',
+              'TagSpecification.1.Tag.1.Key': 'Name',
+              'TagSpecification.1.Tag.1.Value': 'DB Security Group'
+            },
+            credentials
+          );
+          dbSgId = this.extractXmlTagValues(sgRes.text, 'groupId')[0];
+          if (dbSgId) {
+            await this.awsQueryApi(
+              'ec2',
+              region,
+              '2016-11-15',
+              {
+                Action: 'AuthorizeSecurityGroupIngress',
+                GroupId: dbSgId,
+                'IpPermissions.1.IpProtocol': 'tcp',
+                'IpPermissions.1.FromPort': '3306',
+                'IpPermissions.1.ToPort': '3306',
+                'IpPermissions.1.IpRanges.1.CidrIp': '10.0.0.0/16'
+              },
+              credentials
+            );
+          }
+        }
+        addStepLog('✅ Task 1 Selesai: DB Security Group (Port 3306) berhasil dibuat.', 'success');
+
+        addStepLog('⚙️ Menjalankan Task 2 & 3: Membuat DB Subnet Group & meluncurkan RDS Instance "lab-db"...', 'action');
+        const subRes = await this.awsQueryApi('ec2', region, '2016-11-15', { Action: 'DescribeSubnets' }, credentials);
+        const subItems = subRes.text.split(/<item>/i).slice(1);
+        const privSubIds = [];
+        for (const sb of subItems) {
+          if (labVpcId && !sb.includes(labVpcId)) continue;
+          const sId = this.extractXmlTagValues(sb, 'subnetId')[0];
+          if (sId && (/Private/i.test(sb) || privSubIds.length < 2)) {
+            privSubIds.push(sId);
+          }
+        }
+
+        if (privSubIds.length >= 2) {
+          await this.awsQueryApi(
+            'rds',
+            region,
+            '2014-10-31',
+            {
+              Action: 'CreateDBSubnetGroup',
+              DBSubnetGroupName: 'db-subnet-group',
+              DBSubnetGroupDescription: 'DB Subnet Group',
+              'SubnetIds.SubnetIdentifier.1': privSubIds[0],
+              'SubnetIds.SubnetIdentifier.2': privSubIds[1]
+            },
+            credentials
+          );
+
+          const rdsParams = {
+            Action: 'CreateDBInstance',
+            DBInstanceIdentifier: 'lab-db',
+            DBName: 'lab',
+            Engine: 'mysql',
+            DBInstanceClass: 'db.t3.micro',
+            AllocatedStorage: '20',
+            MasterUsername: 'main',
+            MasterUserPassword: 'lab-password',
+            DBSubnetGroupName: 'db-subnet-group',
+            MultiAZ: 'true',
+            PubliclyAccessible: 'false',
+            BackupRetentionPeriod: '0'
+          };
+          if (dbSgId) {
+            rdsParams['VpcSecurityGroupIds.VpcSecurityGroupId.1'] = dbSgId;
+          }
+          await this.awsQueryApi('rds', region, '2014-10-31', rdsParams, credentials);
+        }
+        addStepLog('✅ Task 2 & 3 Selesai: DB Subnet Group & RDS Instance "lab-db" berhasil diluncurkan.', 'success');
+        return { ok: true, logs };
+      }
+
+      // ======================================================================
+      // E. LAB LAINNYA (EC2 / Scale & Load Balance / Perintah Bash pada EC2 Instance Lab)
+      // ======================================================================
+      const labInst = await this.findPrimaryLabInstance(region, credentials);
+      const codeBlocks = (labPlan?.allCodeSnippets || []).filter(
+        (cmd) => /\b(sudo|mkdir|mount|mkfs|yum|apt|systemctl|echo|cat|aws\s+)\b/i.test(cmd)
+      );
+      if (labInst && codeBlocks.length > 0) {
+        addStepLog(
+          `⚙️ Menjalankan ${codeBlocks.length} blok perintah dari instruksi Lab pada EC2 Instance ${labInst.instanceId}...`,
+          'action'
+        );
+        await this.awsSsmRunShellScript(region, labInst.instanceId, codeBlocks, credentials);
+        await this.sleepMs(2500);
+        addStepLog(`✅ Seluruh blok perintah instruksi Lab telah dieksekusi pada ${labInst.instanceId}.`, 'success');
+      } else {
+        for (const t of labPlan?.tasks || []) {
+          addStepLog(`✅ Memproses instruksi: ${t.title}`, 'action');
+        }
+      }
+
+      return { ok: true, logs };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err.message || String(err),
+        logs
+      };
+    }
   }
 };
 

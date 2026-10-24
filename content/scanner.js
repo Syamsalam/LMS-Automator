@@ -37,11 +37,6 @@ const LMSScanner = {
         }
         if (el.tagName === 'IFRAME' || el.tagName === 'FRAME') {
           try {
-            // Jika child iframe sudah memiliki instance LMSAutoPilot sendiri yang aktif,
-            // biarkan child iframe tersebut memindai dokumennya sendiri agar tidak terjadi double-click!
-            if (el.contentWindow && el.contentWindow !== window && el.contentWindow.LMSAutoPilot) {
-              continue;
-            }
             const doc = el.contentDocument || el.contentWindow?.document;
             if (doc && doc.documentElement && !seenRoots.has(doc)) {
               seenRoots.add(doc);
@@ -518,12 +513,254 @@ const LMSScanner = {
   },
 
   /**
+   * Deteksi apakah halaman saat ini adalah Workbench Lab (seperti `labs.vocareum.com` pada AWS Academy)
+   * yang menampilkan tombol `Start Lab`, `End Lab`, `AWS Details`, `Submit`, dan instruksi penuh Lab.
+   */
+  isVocareumWorkbenchPage() {
+    const host = window.location.hostname || '';
+    if (/\bvocareum\.com\b/i.test(host)) {
+      return true;
+    }
+    const allBtnTexts = this.queryAllDeep('button, a, [role="button"], span')
+      .filter((el) => this.isVisible(el))
+      .map((el) => this.cleanText(el.innerText || el.textContent || ''));
+    const hasStartLab = allBtnTexts.some((t) => /^start\s+lab$/i.test(t));
+    const hasEndLab = allBtnTexts.some((t) => /^end\s+lab$/i.test(t));
+    const hasAwsDetails = allBtnTexts.some((t) => /^aws\s+details$/i.test(t));
+    return (hasStartLab && hasEndLab) || (hasStartLab && hasAwsDetails);
+  },
+
+  /**
+   * Pindai & pelajari seluruh instruksi di dalam halaman Lab (Vocareum Workbench):
+   * - Judul Lab (misal `Lab 4: Working with EBS`)
+   * - Lab Overview & Topics covered
+   * - Daftar lengkap Task (`Task 1`, `Task 2`, `Task 3`, ...) beserta langkah-langkah detail, tabel parameter, dan blok perintah kode (`<pre><code>`)
+   * - Tombol kontrol Workbench (`Start Lab`, `AWS Details`, `AWS`, `Submit`, dan status kesiapan `AWS`)
+   */
+  scanVocareumLab() {
+    if (!this.isVocareumWorkbenchPage()) return null;
+
+    const rootMarker = document.documentElement || document.body;
+    const labId = this.tagElement(rootMarker, 'vocareum-lab');
+    const isCompleted = rootMarker.getAttribute('data-lms-lab-completed') === 'true';
+
+    // 1. Cari tombol kontrol di toolbar atas Vocareum (`Start Lab`, `AWS Details`, `AWS`, `Submit`)
+    const clickables = this.queryAllDeep('button, a, [role="button"], input[type="button"], span, div').filter(
+      (el) => this.isVisible(el) && !el.closest('#lms-autopilot-hud-host')
+    );
+
+    const findToolbarBtn = (regex) => {
+      const matches = clickables.filter((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.width < 24 || r.width > 240 || r.height < 16 || r.height > 65) return false;
+        const txt = this.cleanText(el.innerText || el.value || el.getAttribute('title') || '');
+        return regex.test(txt);
+      });
+      const leaf = matches.filter((el) => !matches.some((other) => other !== el && el.contains(other)));
+      return leaf[0] || matches[0] || null;
+    };
+
+    const startLabEl = document.querySelector('#btnStart') || findToolbarBtn(/^start\s+lab$/i);
+    const awsDetailsEl = document.querySelector('#btnAwsDetails') || findToolbarBtn(/^aws\s+details$/i);
+    const awsConsoleEl = document.querySelector('#launchaws, #btnAws') || findToolbarBtn(/^aws$/i);
+    const submitLabEl =
+      document.querySelector('#btnSubmit') ||
+      clickables.find((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.width < 32 || r.width > 160 || r.height < 16 || r.height > 55) return false;
+        const txt = this.cleanText(el.innerText || el.value || '');
+        return /^submit$/i.test(txt) && !el.closest('form#quiz_form');
+      }) ||
+      null;
+
+    // Deteksi status environment AWS (`stopped` | `starting` | `ready`)
+    let awsStatus = 'stopped';
+    const pageTextSample = this.cleanText(document.body?.innerText || '').slice(0, 1500);
+    const hasActiveTimer = /\b\d{2}:\d{2}\b/.test(pageTextSample) && !/\b00:00\b/.test(pageTextSample);
+
+    if (awsConsoleEl) {
+      const parentBar = awsConsoleEl.parentElement || awsConsoleEl;
+      const barHtml = (parentBar.innerHTML || '').toLowerCase();
+      const dotEl = parentBar.querySelector('span, i, .circle, .dot, .led, [class*="status"]');
+      const dotStyle = dotEl ? (dotEl.getAttribute('style') || '') + ' ' + (dotEl.className || '') : '';
+      const computedDotColor = dotEl
+        ? (dotEl.ownerDocument?.defaultView || window).getComputedStyle(dotEl).backgroundColor ||
+          (dotEl.ownerDocument?.defaultView || window).getComputedStyle(dotEl).color ||
+          ''
+        : '';
+      const combinedIndicator = `${barHtml} ${dotStyle} ${computedDotColor}`.toLowerCase();
+
+      if (
+        /\b(green|ready|#28a745|#008000|#10b981|#22c55e|rgb\(\s*(?:0|16|34|40)\s*,\s*(?:128|167|185|197))\b/i.test(
+          combinedIndicator
+        )
+      ) {
+        awsStatus = 'ready';
+      } else if (
+        /\b(yellow|orange|starting|provisioning|#ffc107|#f59e0b|#eab308|fa-spin|spinner|rgb\(\s*(?:234|245|255)\s*,\s*(?:158|179|193|204))\b/i.test(
+          combinedIndicator
+        ) ||
+        hasActiveTimer
+      ) {
+        awsStatus = 'starting';
+      }
+    } else if (hasActiveTimer) {
+      awsStatus = 'starting';
+    }
+
+    // 2. Ekstrak seluruh isi dokumen instruksi Lab (Judul, Overview, Topics, Tasks 1..N, Parameter, & Perintah Kode)
+    const allHeadings = this.queryAllDeep('h1, h2, h3, h4').filter(
+      (h) => this.isVisible(h) && !h.closest('#lms-autopilot-hud-host')
+    );
+
+    let labTitle = document.title || 'AWS Lab';
+    for (const h of allHeadings) {
+      const t = this.cleanText(h.innerText || h.textContent || '');
+      if (/\bLab\s*\d*\s*[:\-–]/i.test(t) || (h.tagName === 'H1' && t.length > 4)) {
+        labTitle = t;
+        break;
+      }
+    }
+
+    let overview = '';
+    const topics = [];
+    const tasks = [];
+    const allCodeSnippets = [];
+    const allParameters = {};
+
+    // Kumpulkan semua blok kode (<pre>, <code>) di halaman instruksi
+    this.queryAllDeep('pre, code').forEach((codeEl) => {
+      if (codeEl.closest('#lms-autopilot-hud-host')) return;
+      if (codeEl.tagName === 'CODE' && codeEl.parentElement?.tagName === 'PRE') return;
+      const rawCode = (codeEl.innerText || codeEl.textContent || '').trim();
+      if (rawCode.length >= 4 && rawCode.length <= 4000) {
+        allCodeSnippets.push(rawCode);
+      }
+    });
+
+    // Kumpulkan parameter dari tabel (`<tr><th>/<td>Key</td><td>Value</td></tr>`) dan bullet list (`Key: Value`)
+    this.queryAllDeep('table tr').forEach((tr) => {
+      const cells = Array.from(tr.querySelectorAll('th, td')).map((c) =>
+        this.cleanText(c.innerText || c.textContent || '')
+      );
+      if (cells.length >= 2 && cells[0] && cells[1] && cells[0].length <= 65 && cells[1].length <= 160) {
+        allParameters[cells[0]] = cells[1];
+      }
+    });
+
+    this.queryAllDeep('li').forEach((li) => {
+      if (li.closest('#lms-autopilot-hud-host')) return;
+      const txt = this.cleanText(li.innerText || li.textContent || '');
+      const kvMatch = txt.match(/^([A-Za-z0-9\s()/_-]{2,45})\s*:\s*(.{1,120})$/);
+      if (kvMatch) {
+        const k = kvMatch[1].trim();
+        const v = kvMatch[2].trim();
+        if (!/^(note|tip|important|warning|task|step|http)/i.test(k)) {
+          allParameters[k] = v;
+        }
+      }
+    });
+
+    // Kelompokkan instruksi berdasarkan bagian Heading (`Lab Overview`, `Topics covered`, `Task 1: ...`, `Task 2: ...`, dst.)
+    for (let i = 0; i < allHeadings.length; i++) {
+      const h = allHeadings[i];
+      const nextH = allHeadings[i + 1] || null;
+      const hText = this.cleanText(h.innerText || h.textContent || '');
+
+      // Kumpulkan teks dan elemen di antara heading `h` dan `nextH`
+      const sectionLines = [];
+      const sectionCodes = [];
+      const sectionParams = {};
+
+      let curr = h.nextElementSibling;
+      let stepsGuard = 0;
+      while (curr && curr !== nextH && stepsGuard < 80) {
+        stepsGuard++;
+        if (allHeadings.includes(curr)) break;
+        const cText = this.cleanText(curr.innerText || curr.textContent || '');
+        if (cText) sectionLines.push(cText);
+
+        if (curr.tagName === 'UL' || curr.tagName === 'OL') {
+          Array.from(curr.querySelectorAll('li')).forEach((li) => {
+            const liTxt = this.cleanText(li.innerText || li.textContent || '');
+            if (/topics\s+covered|objectives/i.test(hText) && liTxt) {
+              topics.push(liTxt);
+            }
+            const kv = liTxt.match(/^([A-Za-z0-9\s()/_-]{2,45})\s*:\s*(.{1,120})$/);
+            if (kv) {
+              sectionParams[kv[1].trim()] = kv[2].trim();
+            }
+          });
+        }
+
+        const preEls = curr.tagName === 'PRE' ? [curr] : Array.from(curr.querySelectorAll ? curr.querySelectorAll('pre') : []);
+        preEls.forEach((pEl) => {
+          const codeStr = (pEl.innerText || pEl.textContent || '').trim();
+          if (codeStr) sectionCodes.push(codeStr);
+        });
+
+        curr = curr.nextElementSibling;
+      }
+
+      if (/lab\s+overview|^overview$/i.test(hText) && sectionLines.length > 0) {
+        overview = sectionLines.join(' ').slice(0, 1200);
+      }
+
+      const taskMatch = hText.match(/^(?:Task|Step|Activity|Challenge|Bagian)\s*(\d+)\s*[:.\-–]?\s*(.*)$/i);
+      if (taskMatch) {
+        tasks.push({
+          taskNumber: Number(taskMatch[1]),
+          title: hText,
+          shortTitle: taskMatch[2] ? taskMatch[2].trim() : hText,
+          instructions: sectionLines.join('\n').slice(0, 2500),
+          codeSnippets: sectionCodes,
+          parameters: sectionParams
+        });
+      }
+    }
+
+    // Jika dokumen Lab tidak memakai kata "Task 1" tetapi memiliki daftar "Topics covered", jadikan tiap topik sebagai daftar tugas yang harus dijalankan
+    if (tasks.length === 0 && topics.length > 0) {
+      topics.forEach((top, idx) => {
+        tasks.push({
+          taskNumber: idx + 1,
+          title: `Task ${idx + 1}: ${top}`,
+          shortTitle: top,
+          instructions: top,
+          codeSnippets: [],
+          parameters: {}
+        });
+      });
+    }
+
+    const fullText = this.extractModuleContext();
+
+    return {
+      labId,
+      labTitle,
+      overview,
+      topics,
+      tasks,
+      allCodeSnippets: allCodeSnippets.slice(0, 30),
+      allParameters,
+      fullText,
+      awsStatus,
+      startLabBtnId: startLabEl ? this.tagElement(startLabEl, 'voc-start-lab') : null,
+      awsDetailsBtnId: awsDetailsEl ? this.tagElement(awsDetailsEl, 'voc-aws-details') : null,
+      awsConsoleBtnId: awsConsoleEl ? this.tagElement(awsConsoleEl, 'voc-aws-console') : null,
+      submitLabBtnId: submitLabEl ? this.tagElement(submitLabEl, 'voc-submit-lab') : null,
+      isCompleted
+    };
+  },
+
+  /**
    * Pindai seluruh halaman aktif dan kembalikan struktur data lengkap
    */
   scanPage(config = {}) {
     const customSelectors = config.customSelectors || {};
     const pageTitle = this.cleanText(document.title);
     const isModIndex = this.isModulesIndexPage();
+    const isVocareum = !isModIndex && this.isVocareumWorkbenchPage();
 
     // Jika berada di dalam halaman item modul (bukan halaman daftar `/modules`), catat URL-nya sebagai sudah dikunjungi
     if (!isModIndex && window === window.top) {
@@ -531,20 +768,36 @@ const LMSScanner = {
     }
 
     const moduleContext = isModIndex ? '' : this.extractModuleContext();
+    const vocareumLab = isVocareum ? this.scanVocareumLab() : null;
 
-    // Pada halaman daftar modul (`/courses/.../modules`), jangan memindai daftar modul sebagai soal PG/Simulasi/Esai!
-    const simulations = isModIndex ? [] : this.scanSimulations(customSelectors);
-    const mcqs = isModIndex ? [] : this.scanMCQs(customSelectors, simulations);
-    const inlineBlanks = isModIndex ? [] : this.scanInlineBlanks(customSelectors, simulations);
-    const actionPrompts = isModIndex ? [] : this.scanActionPrompts(customSelectors, simulations);
-    const videos = isModIndex ? [] : this.scanVideos();
-    const essays = isModIndex ? [] : this.scanEssays(customSelectors, simulations);
-    const navigation = this.scanNavigation(customSelectors, simulations);
+    // Pada halaman daftar modul (`/courses/.../modules`) atau Vocareum Workbench, jangan memindai kontrol toolbar sebagai soal/action prompt biasa!
+    const simulations = isModIndex || isVocareum ? [] : this.scanSimulations(customSelectors);
+    const mcqs = isModIndex || isVocareum ? [] : this.scanMCQs(customSelectors, simulations);
+    const inlineBlanks = isModIndex || isVocareum ? [] : this.scanInlineBlanks(customSelectors, simulations);
+    const actionPrompts = isModIndex || isVocareum ? [] : this.scanActionPrompts(customSelectors, simulations);
+    const videos = isModIndex || isVocareum ? [] : this.scanVideos();
+    const essays = isModIndex || isVocareum ? [] : this.scanEssays(customSelectors, simulations);
+    const navigation = isVocareum
+      ? {
+          submitButtonId: null,
+          submitButtonLabel: null,
+          submitButtonIds: [],
+          nextButtonId: null,
+          nextButtonLabel: null,
+          isCarouselNext: false,
+          isOutlineNext: false,
+          isModuleIndexEntry: false
+        }
+      : this.scanNavigation(customSelectors, simulations);
+
+    const vocCount = vocareumLab && !vocareumLab.isCompleted ? Math.max(vocareumLab.tasks.length, 1) : 0;
 
     return {
       url: window.location.href,
       pageTitle,
       isModulesIndexPage: isModIndex,
+      isVocareumWorkbench: isVocareum,
+      vocareumLab,
       moduleContext,
       simulations,
       mcqs,
@@ -554,10 +807,10 @@ const LMSScanner = {
       essays,
       navigation,
       summary: {
-        simulationCount: simulations.length + actionPrompts.length + videos.length,
+        simulationCount: simulations.length + actionPrompts.length + videos.length + vocCount,
         mcqCount: mcqs.length + inlineBlanks.length,
         essayCount: essays.length,
-        hasSubmit: Boolean(navigation.submitButtonId),
+        hasSubmit: Boolean(navigation.submitButtonId || vocareumLab?.submitLabBtnId),
         hasNext: Boolean(navigation.nextButtonId)
       }
     };
@@ -3716,6 +3969,21 @@ const LMSScanner = {
    *    (Mendukung Halaman Daftar Modul Canvas `/courses/.../modules`, `.module-sequence-footer`, Articulate Rise, maupun Course Outline)
    */
   scanNavigation(customSelectors = {}, simulations = []) {
+    // A-0. Pada halaman Vocareum Lab Workbench, tombol Submit hanya boleh diklik oleh executeVocareumLab()
+    //      setelah seluruh instruksi Lab selesai dipelajari dan dijalankan!
+    if (this.isVocareumWorkbenchPage()) {
+      return {
+        submitButtonId: null,
+        submitButtonLabel: null,
+        submitButtonIds: [],
+        nextButtonId: null,
+        nextButtonLabel: null,
+        isCarouselNext: false,
+        isOutlineNext: false,
+        isModuleIndexEntry: false
+      };
+    }
+
     // A. Jika saat ini berada di Halaman Daftar Modul (seperti `awsacademy.instructure.com/courses/184279/modules`),
     //    langsung cari item modul pertama yang belum selesai / belum dikunjungi untuk dimasuki!
     //    PENTING: Selalu return di sini agar tidak pernah jatuh ke menu sidebar kiri (Home/Discussions/Grades/Notebook)!

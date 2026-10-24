@@ -32,21 +32,25 @@ const LMSAutoPilot = {
     const hasEssay = (scan.essays || []).some(
       (e) => !e.isFilled && !this.completedTaskIds.has(e.essayId)
     );
-    return hasSim || hasPrompt || hasVideo || hasBlank || hasMcq || hasEssay;
+    const hasVocLab = Boolean(
+      scan.vocareumLab &&
+        !scan.vocareumLab.isCompleted &&
+        !this.completedTaskIds.has(scan.vocareumLab.labId)
+    );
+    return hasSim || hasPrompt || hasVideo || hasBlank || hasMcq || hasEssay || hasVocLab;
   },
 
   /**
-   * Cek apakah frame saat ini memiliki child iframe konten aktif yang berukuran besar
-   * (baik cross-origin maupun same-origin yang memiliki instance LMSAutoPilot sendiri, seperti `#tool_content` atau `story.html` pada AWS Academy)
+   * Cek apakah frame saat ini memiliki child iframe cross-origin aktif yang berukuran besar
+   * (seperti `#tool_content` atau `story.html` pada AWS Academy / NetAcad)
    */
   hasActiveCrossOriginContentIframe() {
-    return Array.from(document.querySelectorAll('iframe, frame')).some((f) => {
+    return window.LMSScanner.queryAllDeep('iframe, frame').some((f) => {
       if (!window.LMSScanner.isVisible(f)) return false;
       const rect = f.getBoundingClientRect();
       if (rect.width < 200 || rect.height < 130) return false;
       try {
-        if (!f.contentDocument) return true;
-        return Boolean(f.contentWindow && f.contentWindow !== window && f.contentWindow.LMSAutoPilot);
+        return !f.contentDocument;
       } catch {
         return true;
       }
@@ -96,12 +100,16 @@ const LMSAutoPilot = {
   },
 
   async init() {
-    // Hanya abaikan sub-frame jika sudah selesai dimuat dan ukurannya sangat kecil (tracker/pixel tersembunyi)
-    if (window !== window.top && document.readyState === 'complete') {
-      const fw = window.innerWidth || document.documentElement?.clientWidth || 0;
-      const fh = window.innerHeight || document.documentElement?.clientHeight || 0;
-      if (fw > 0 && fh > 0 && (fw < 140 || fh < 90)) {
-        return;
+    // Jika berada di dalam sub-frame yang same-origin terhadap parent-nya,
+    // biarkan parent memindai dokumen ini secara langsung melalui queryAllDeep() agar tidak terjadi double-click!
+    // Namun jika cross-origin terhadap parent-nya, frame ini wajib menjalankan LMSAutoPilot sendiri.
+    if (window !== window.top) {
+      try {
+        if (window.parent && window.parent !== window && window.parent.document) {
+          return;
+        }
+      } catch {
+        // Cross-origin terhadap parent: lanjutkan inisialisasi pada frame ini
       }
     }
 
@@ -606,6 +614,37 @@ const LMSAutoPilot = {
           (e) => !e.isFilled && !this.completedTaskIds.has(e.essayId)
         );
 
+        // Prioritas 00: Jika berada di halaman Vocareum Lab Workbench (`labs.vocareum.com`),
+        // pelajari terlebih dahulu seluruh instruksi di dalam Lab, mulai Lab (`Start Lab`), dan jalankan seluruh instruksi Task 1..N!
+        if (
+          pageData.vocareumLab &&
+          !pageData.vocareumLab.isCompleted &&
+          !this.completedTaskIds.has(pageData.vocareumLab.labId)
+        ) {
+          this.completedTaskIds.add(pageData.vocareumLab.labId);
+          const labRes = await window.LMSExecutor.executeVocareumLab(
+            pageData.vocareumLab,
+            config,
+            (msg, lvl) => window.LMSStorage.addLog(msg, lvl)
+          );
+          const currentState = await window.LMSStorage.getState();
+          const stats = { ...(currentState.stats || window.LMSStorage.DEFAULT_STATE.stats) };
+          stats.simulationsRun =
+            (stats.simulationsRun || 0) + Math.max((pageData.vocareumLab.tasks || []).length, 1);
+          stats.pagesCompleted = (stats.pagesCompleted || 0) + 1;
+          await window.LMSStorage.updateState({
+            isRunning: false,
+            currentPhase: labRes && labRes.ok === false ? 'ERROR' : 'COMPLETED',
+            statusText:
+              labRes && labRes.ok === false
+                ? `Lab selesai sebagian: ${labRes.reason || ''}`
+                : 'Seluruh instruksi Lab selesai dijalankan!',
+            stats
+          });
+          this.isExecutingCycle = false;
+          return;
+        }
+
         // Prioritas 0A: Jika ada tombol pemicu aktivitas / peluncur Knowledge Check ("Start", "Continue")
         // atau tombol pemulai Lab memakai nama Lab ("Load [Nama Lab] in a new window", "[Nama Lab]", "Start Lab"),
         // klik terlebih dahulu!
@@ -628,17 +667,17 @@ const LMSAutoPilot = {
             promptEl.setAttribute('data-lms-completed', 'true');
             const navRes = await window.LMSExecutor.navigateOrClick(promptEl, '#f59e0b');
 
-            // Jika tombol yang diklik adalah tombol pemulai Lab yang membuka tab baru (menampilkan instruksi penuh Lab),
-            // hentikan Auto-Pilot pada tab ini agar pengguna dapat langsung melihat instruksi penuh Lab di tab baru!
+            // Jika tombol yang diklik membuka tab baru Lab (seperti `labs.vocareum.com`),
+            // BIARKAN `isRunning: true` agar tab baru Vocareum otomatis mempelajari & menjalankan seluruh instruksi Lab!
             if (navRes && navRes.openedNewTab) {
               await window.LMSStorage.updateState({
-                isRunning: false,
-                currentPhase: 'COMPLETED',
-                statusText: 'Tab instruksi penuh Lab telah dibuka!'
+                isRunning: true,
+                currentPhase: 'SCANNING',
+                statusText: 'Tab Lab dibuka — mempelajari & menjalankan instruksi Lab...'
               });
               await window.LMSStorage.addLog(
-                `Tab baru Lab telah dibuka melalui tombol "${promptItem.label}". Menampilkan instruksi penuh Lab.`,
-                'success'
+                `Tab baru Lab dibuka melalui "${promptItem.label}". Melanjutkan mempelajari & menjalankan instruksi di tab Lab...`,
+                'info'
               );
               this.isExecutingCycle = false;
               return;
