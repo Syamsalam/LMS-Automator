@@ -1623,30 +1623,42 @@ const LMSExecutor = {
         return /^show(?:\s+aws\s+cli)?$/i.test(txt);
       });
 
-    // 1. Hanya klik tombol "AWS Details" di toolbar atas jika tombol "Show" (AWS CLI) belum terlihat di layar
+    // 1. Hanya klik tombol "AWS Details" SATU KALI jika tombol "Show" (AWS CLI) belum terlihat di layar
+    //    PENTING: Jangan pernah mengklik "AWS Details" berulang-ulang karena tombol tersebut bersifat toggle (buka/tutup)!
     let showBtns = findShowCliBtns();
     if (showBtns.length === 0) {
       const detailsBtn =
         (awsDetailsBtnId && window.LMSScanner.getElementById(awsDetailsBtnId)) ||
-        window.LMSScanner.queryAllDeep('button, a, [role="button"], span').find(
-          (el) =>
-            window.LMSScanner.isVisible(el) &&
-            /^aws\s+details$/i.test(window.LMSScanner.cleanText(el.innerText || ''))
-        );
+        window.LMSScanner.queryAllDeep('button, a, [role="button"], span').find((el) => {
+          if (!window.LMSScanner.isVisible(el)) return false;
+          const txt = window.LMSScanner
+            .cleanText(el.innerText || '')
+            .replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '')
+            .replace(/^i\s+/i, '')
+            .trim();
+          return /^aws\s+details$/i.test(txt);
+        });
 
-      if (detailsBtn && window.LMSScanner.isVisible(detailsBtn)) {
+      if (
+        detailsBtn &&
+        window.LMSScanner.isVisible(detailsBtn) &&
+        detailsBtn.getAttribute('data-lms-details-toggled') !== 'true'
+      ) {
+        detailsBtn.setAttribute('data-lms-details-toggled', 'true');
         await this.clickElement(detailsBtn, '#0284c7');
-        await this.sleep(650);
+        await this.sleep(750);
       }
       creds = parseCredsFromDom();
       if (creds) return creds;
       showBtns = findShowCliBtns();
     }
 
-    // 2. Klik tombol "Show" di sebelah "AWS CLI:" di dalam panel AWS Details
-    for (const sBtn of showBtns.slice(0, 3)) {
+    // 2. Klik tombol "Show" di sebelah "AWS CLI:" di dalam panel AWS Details (maksimal 1 kali per tombol)
+    for (const sBtn of showBtns.slice(0, 2)) {
+      if (sBtn.getAttribute('data-lms-cli-shown') === 'true') continue;
+      sBtn.setAttribute('data-lms-cli-shown', 'true');
       await this.clickElement(sBtn, '#0284c7');
-      await this.sleep(550);
+      await this.sleep(650);
       creds = parseCredsFromDom();
       if (creds) return creds;
     }
@@ -1658,10 +1670,10 @@ const LMSExecutor = {
    * 5. Pelajari Seluruh Instruksi Lab & Jalankan Seluruh Instruksi pada Vocareum Workbench (`labs.vocareum.com`)
    *    Alur:
    *    1) Scroll & pelajari semua instruksi di dalam Lab (`Lab Overview`, `Topics covered`, `Task 1`..`Task N`, parameter & kode)
-   *    2) Klik `Start Lab` (jika belum berjalan) dan tunggu hingga status `AWS` siap (`AWS 🟢` & kredensial tersedia)
-   *    3) Ambil kredensial sesi Lab dari `AWS Details` -> `Show`
-   *    4) Eksekusi seluruh Task Lab (`Task 1`..`Task N`) secara berurutan terhadap environment AWS Lab
-   *    5) Klik tombol `Submit` di Vocareum Workbench untuk menilai Lab
+   *    2) Jika status `AWS 🔴` (`stopped` / `00:00`), klik tombol `▶ Start Lab` terlebih dahulu!
+   *    3) Tunggu hingga status berubah dari `AWS 🔴`/`🟡` menjadi `AWS 🟢` (`ready`) TANPA mengklik `AWS Details` berulang-ulang!
+   *    4) Setelah `AWS 🟢` siap, ambil kredensial sesi Lab dari `AWS Details` -> `Show` (1x) dan jalankan seluruh Task Lab (`Task 1`..`Task N`)
+   *    5) Klik tombol `Submit` di Vocareum Workbench setelah seluruh Task berhasil dijalankan
    */
   async executeVocareumLab(vocLab, config, onLog) {
     const rootMarker = document.documentElement || document.body;
@@ -1691,89 +1703,117 @@ const LMSExecutor = {
     } catch {}
     await this.sleep(300);
 
-    const studiedLab = window.LMSScanner.scanVocareumLab() || vocLab;
-    await window.LMSStorage.updateState({ activeLabPlan: studiedLab });
+    let currentLab = window.LMSScanner.scanVocareumLab() || vocLab;
+    await window.LMSStorage.updateState({ activeLabPlan: currentLab });
 
     if (onLog) {
-      const taskCount = (studiedLab.tasks || []).length;
+      const taskCount = (currentLab.tasks || []).length;
       await onLog(
-        `📋 Selesai mempelajari instruksi "${studiedLab.labTitle}" (${taskCount} Task & ${Object.keys(studiedLab.allParameters || {}).length} parameter teridentifikasi):`,
+        `📋 Selesai mempelajari instruksi "${currentLab.labTitle}" (${taskCount} Task & ${Object.keys(currentLab.allParameters || {}).length} parameter teridentifikasi):`,
         'info'
       );
-      for (const t of studiedLab.tasks || []) {
+      for (const t of currentLab.tasks || []) {
         await onLog(`  • ${t.title}`, 'info');
       }
     }
 
-    // TAHAP 2: Pastikan environment Lab sudah dimulai (`Start Lab`) dan tunggu hingga siap (`AWS 🟢`)
-    let creds = await this.extractVocareumAwsCredentials(studiedLab.awsDetailsBtnId, true);
+    // TAHAP 2: Pastikan environment Lab dimulai (`▶ Start Lab`) terlebih dahulu jika masih `stopped` (`AWS 🔴` / `00:00`)
+    // PENTING: Jangan mengklik `AWS Details` sebelum `Start Lab` ditekan dan sebelum `AWS 🟢` siap!
+    let creds = await this.extractVocareumAwsCredentials(currentLab.awsDetailsBtnId, false);
 
-    if (!creds) {
-      const freshLabCheck = window.LMSScanner.scanVocareumLab() || studiedLab;
-      if (freshLabCheck.awsStatus === 'stopped' && freshLabCheck.startLabBtnId) {
-        const startBtn = window.LMSScanner.getElementById(freshLabCheck.startLabBtnId);
-        if (startBtn && window.LMSScanner.isVisible(startBtn)) {
-          if (onLog) {
-            await onLog('🚀 Menekan tombol "Start Lab" untuk memulai environment AWS Lab...', 'action');
-          }
-          await window.LMSStorage.updateState({
-            currentPhase: 'SIMULATION',
-            statusText: 'Memulai environment AWS Lab (Start Lab)...'
+    if (!creds && currentLab.awsStatus === 'stopped') {
+      const startBtn = currentLab.startLabBtnId
+        ? window.LMSScanner.getElementById(currentLab.startLabBtnId)
+        : null;
+
+      if (startBtn && window.LMSScanner.isVisible(startBtn)) {
+        if (onLog) {
+          await onLog('🚀 Menekan tombol "▶ Start Lab" untuk memulai environment AWS Lab...', 'action');
+        }
+        await window.LMSStorage.updateState({
+          currentPhase: 'SIMULATION',
+          statusText: 'Menekan tombol "▶ Start Lab" untuk menjalankan Lab...'
+        });
+        await this.clickElement(startBtn, '#f59e0b');
+        await this.sleep(2200);
+
+        // Jika ada dialog konfirmasi setelah klik Start Lab, klik OK/Confirm
+        const startConfirmBtn = window.LMSScanner
+          .queryAllDeep('button, a, input[type="button"], [role="button"]')
+          .find((el) => {
+            if (!window.LMSScanner.isVisible(el) || el === startBtn) return false;
+            const t = window.LMSScanner.cleanText(el.innerText || el.value || '');
+            return /^(?:yes|ok|confirm|start)$/i.test(t);
           });
-          await this.clickElement(startBtn, '#f59e0b');
+        if (startConfirmBtn) {
+          await this.clickElement(startConfirmBtn, '#f59e0b');
+          await this.sleep(1000);
+        }
+
+        // Verifikasi apakah status sudah berubah ke 'starting' atau 'ready'; jika belum, klik elemen parent/tombol sekali lagi
+        currentLab = window.LMSScanner.scanVocareumLab() || currentLab;
+        if (currentLab.awsStatus === 'stopped' && startBtn.parentElement) {
+          await this.clickElement(startBtn.parentElement, '#f59e0b');
           await this.sleep(1500);
+          currentLab = window.LMSScanner.scanVocareumLab() || currentLab;
         }
       }
+    }
 
-      // Tunggu hingga environment AWS selesai disiapkan (indikator AWS berubah hijau / kredensial AWS Details muncul)
+    // TAHAP 3: Tunggu dengan tenang hingga indikator `AWS` berubah menjadi Hijau (`AWS 🟢` / `ready`)
+    // TANPA melakukan looping klik pada `AWS Details`!
+    if (!creds && currentLab.awsStatus !== 'ready') {
       if (onLog) {
-        await onLog('⏳ Menunggu environment AWS Lab siap digunakan (AWS 🟢)...', 'info');
+        await onLog(
+          '⏳ Menunggu proses Start Lab selesai hingga indikator AWS berubah menjadi Hijau (AWS 🟢)...',
+          'info'
+        );
       }
-      for (let waitIdx = 0; waitIdx < 80; waitIdx++) {
+
+      for (let waitIdx = 0; waitIdx < 120; waitIdx++) {
         const st = await window.LMSStorage.getState();
         if (!st.isRunning) return { ok: false, reason: 'Dihentikan oleh pengguna' };
 
+        currentLab = window.LMSScanner.scanVocareumLab() || currentLab;
+        creds = await this.extractVocareumAwsCredentials(currentLab.awsDetailsBtnId, false);
+        if (creds || currentLab.awsStatus === 'ready') {
+          break;
+        }
+
         await window.LMSStorage.updateState({
           currentPhase: 'SIMULATION',
-          statusText: `Menunggu environment AWS Lab siap (${(waitIdx + 1) * 3}d)...`
+          statusText: `Menunggu Lab berjalan / AWS 🟢 (${(waitIdx + 1) * 3}d)...`
         });
-
-        // Cek kembali apakah kredensial sudah tersedia di AWS Details
-        if (waitIdx % 2 === 0) {
-          const detailsBtn = studiedLab.awsDetailsBtnId
-            ? window.LMSScanner.getElementById(studiedLab.awsDetailsBtnId)
-            : null;
-          if (detailsBtn) detailsBtn.removeAttribute('data-lms-details-opened');
-        }
-        creds = await this.extractVocareumAwsCredentials(studiedLab.awsDetailsBtnId, true);
-        if (creds && creds.accessKeyId && creds.secretAccessKey) {
-          break;
-        }
-
-        const nowLab = window.LMSScanner.scanVocareumLab();
-        if (nowLab && nowLab.awsStatus === 'ready') {
-          creds = await this.extractVocareumAwsCredentials(nowLab.awsDetailsBtnId, true);
-          break;
-        }
-
         await this.sleep(3000);
       }
     }
 
-    // TAHAP 3: Jalankan seluruh instruksi Task 1..N yang telah dipelajari
+    // Setelah `AWS 🟢` siap, barulah buka `AWS Details` -> `Show` SATU KALI untuk mengambil kredensial AWS CLI
+    if (!creds) {
+      currentLab = window.LMSScanner.scanVocareumLab() || currentLab;
+      if (currentLab.awsStatus === 'ready') {
+        if (onLog) {
+          await onLog('🟢 Indikator AWS sudah Hijau (Ready)! Mengambil kredensial sesi Lab...', 'info');
+        }
+      }
+      creds = await this.extractVocareumAwsCredentials(currentLab.awsDetailsBtnId, true);
+    }
+
+    // TAHAP 4: Jalankan seluruh instruksi Task 1..N yang telah dipelajari
+    let tasksExecutedSuccessfully = false;
     if (creds && creds.accessKeyId && creds.secretAccessKey) {
       if (onLog) {
         await onLog(
-          `🔑 Environment AWS siap (${creds.accessKeyId.slice(0, 8)}...). Menjalankan seluruh instruksi Lab...`,
+          `🔑 Kredensial AWS Lab aktif (${creds.accessKeyId.slice(0, 8)}...). Menjalankan seluruh instruksi Lab...`,
           'action'
         );
       }
       await window.LMSStorage.updateState({
         currentPhase: 'SIMULATION',
-        statusText: `Menjalankan instruksi ${studiedLab.labTitle}...`
+        statusText: `Menjalankan instruksi ${currentLab.labTitle}...`
       });
 
-      const execResponse = await this.invokeAWSLabPlanExecutor(creds, studiedLab, config);
+      const execResponse = await this.invokeAWSLabPlanExecutor(creds, currentLab, config);
       if (execResponse && Array.isArray(execResponse.logs)) {
         for (const item of execResponse.logs) {
           if (onLog) {
@@ -1787,28 +1827,36 @@ const LMSExecutor = {
         }
       }
 
-      if (execResponse && execResponse.ok === false) {
-        if (onLog) {
-          await onLog(`⚠️ Catatan eksekusi Lab: ${execResponse.error || 'Beberapa langkah memerlukan konsol'}`, 'warn');
-        }
+      if (execResponse && execResponse.ok !== false) {
+        tasksExecutedSuccessfully = true;
+      } else if (onLog) {
+        await onLog(
+          `⚠️ Catatan eksekusi Lab: ${execResponse?.error || 'Beberapa langkah memerlukan konsol AWS'}`,
+          'warn'
+        );
       }
     } else {
-      // Jika kredensial CLI tidak ditampilkan di halaman, buka konsol AWS
-      const awsBtn = studiedLab.awsConsoleBtnId
-        ? window.LMSScanner.getElementById(studiedLab.awsConsoleBtnId)
+      // Jika kredensial CLI tidak ditemukan tetapi tombol AWS 🟢 aktif, klik tombol AWS untuk membuka AWS Management Console
+      const awsBtn = currentLab.awsConsoleBtnId
+        ? window.LMSScanner.getElementById(currentLab.awsConsoleBtnId)
         : null;
-      if (awsBtn && window.LMSScanner.isVisible(awsBtn)) {
+      if (awsBtn && window.LMSScanner.isVisible(awsBtn) && currentLab.awsStatus === 'ready') {
         if (onLog) {
-          await onLog('🌐 Membuka AWS Management Console untuk menjalankan instruksi Lab...', 'action');
+          await onLog('🌐 Membuka AWS Management Console (klik tombol AWS 🟢)...', 'action');
         }
-        await this.clickElement(awsBtn, '#f59e0b');
+        await this.clickElement(awsBtn, '#10b981');
         await this.sleep(1500);
+      } else {
+        return {
+          ok: false,
+          reason: 'Environment AWS Lab belum aktif (pastikan Start Lab telah berjalan hingga indikator AWS berwarna hijau).'
+        };
       }
     }
 
-    // TAHAP 4: Klik tombol "Submit" pada Vocareum Workbench untuk menilai pekerjaan Lab
-    const refreshedLab = window.LMSScanner.scanVocareumLab() || studiedLab;
-    if (config.autoSubmit !== false && refreshedLab.submitLabBtnId) {
+    // TAHAP 5: Klik tombol "Submit" pada Vocareum Workbench HANYA jika seluruh Task Lab sudah berhasil dieksekusi
+    const refreshedLab = window.LMSScanner.scanVocareumLab() || currentLab;
+    if (tasksExecutedSuccessfully && config.autoSubmit !== false && refreshedLab.submitLabBtnId) {
       const submitBtn = window.LMSScanner.getElementById(refreshedLab.submitLabBtnId);
       if (submitBtn && window.LMSScanner.isVisible(submitBtn)) {
         if (onLog) {
@@ -1838,7 +1886,7 @@ const LMSExecutor = {
 
     rootMarker.setAttribute('data-lms-lab-completed', 'true');
     if (onLog) {
-      await onLog(`🎉 Seluruh instruksi pada "${studiedLab.labTitle}" telah selesai dijalankan!`, 'success');
+      await onLog(`🎉 Seluruh instruksi pada "${currentLab.labTitle}" telah selesai dijalankan!`, 'success');
     }
     return { ok: true };
   },

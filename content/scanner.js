@@ -523,7 +523,12 @@ const LMSScanner = {
     }
     const allBtnTexts = this.queryAllDeep('button, a, [role="button"], span')
       .filter((el) => this.isVisible(el))
-      .map((el) => this.cleanText(el.innerText || el.textContent || ''));
+      .map((el) =>
+        this.cleanText(el.innerText || el.textContent || '')
+          .replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '')
+          .replace(/^i\s+/i, '')
+          .trim()
+      );
     const hasStartLab = allBtnTexts.some((t) => /^start\s+lab$/i.test(t));
     const hasEndLab = allBtnTexts.some((t) => /^end\s+lab$/i.test(t));
     const hasAwsDetails = allBtnTexts.some((t) => /^aws\s+details$/i.test(t));
@@ -549,62 +554,158 @@ const LMSScanner = {
       (el) => this.isVisible(el) && !el.closest('#lms-autopilot-hud-host')
     );
 
+    const normalizeToolbarText = (raw) =>
+      this.cleanText(raw || '')
+        .replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '')
+        .replace(/^i\s+(?=(?:aws\s+details|details)\b)/i, '')
+        .trim();
+
     const findToolbarBtn = (regex) => {
       const matches = clickables.filter((el) => {
         const r = el.getBoundingClientRect();
-        if (r.width < 24 || r.width > 240 || r.height < 16 || r.height > 65) return false;
-        const txt = this.cleanText(el.innerText || el.value || el.getAttribute('title') || '');
+        if (r.top > 140 || r.width < 22 || r.width > 260 || r.height < 14 || r.height > 68) return false;
+        const txt = normalizeToolbarText(el.innerText || el.value || el.getAttribute('title') || '');
         return regex.test(txt);
       });
+      if (matches.length === 0) return null;
+
+      // Prioritaskan elemen interaktif utama (<button>, <a>, [role="button"], atau elemen dengan onclick)
+      const interactiveMatch = matches.find(
+        (el) =>
+          el.tagName === 'BUTTON' ||
+          el.tagName === 'A' ||
+          el.getAttribute('role') === 'button' ||
+          el.hasAttribute('onclick')
+      );
+      if (interactiveMatch) return interactiveMatch;
+
       const leaf = matches.filter((el) => !matches.some((other) => other !== el && el.contains(other)));
-      return leaf[0] || matches[0] || null;
+      const chosen = leaf[0] || matches[0];
+      const parentBtn = chosen.closest ? chosen.closest('button, a, [role="button"]') : null;
+      return parentBtn && this.isVisible(parentBtn) ? parentBtn : chosen;
     };
 
-    const startLabEl = document.querySelector('#btnStart') || findToolbarBtn(/^start\s+lab$/i);
-    const awsDetailsEl = document.querySelector('#btnAwsDetails') || findToolbarBtn(/^aws\s+details$/i);
-    const awsConsoleEl = document.querySelector('#launchaws, #btnAws') || findToolbarBtn(/^aws$/i);
+    const startLabEl =
+      document.querySelector('#btnStart, #startlab, [id*="startlab" i]') ||
+      findToolbarBtn(/^start\s+lab$/i);
+    const awsDetailsEl =
+      document.querySelector('#btnAwsDetails, #awsdetails, [id*="awsdetails" i]') ||
+      findToolbarBtn(/^aws\s+details$/i);
+    const awsConsoleEl =
+      document.querySelector('#launchaws, #btnAws, [id*="launchaws" i]') ||
+      findToolbarBtn(/^aws$/i);
     const submitLabEl =
       document.querySelector('#btnSubmit') ||
       clickables.find((el) => {
         const r = el.getBoundingClientRect();
-        if (r.width < 32 || r.width > 160 || r.height < 16 || r.height > 55) return false;
-        const txt = this.cleanText(el.innerText || el.value || '');
+        if (r.top > 160 || r.width < 32 || r.width > 160 || r.height < 16 || r.height > 55) return false;
+        const txt = normalizeToolbarText(el.innerText || el.value || '');
         return /^submit$/i.test(txt) && !el.closest('form#quiz_form');
       }) ||
       null;
 
-    // Deteksi status environment AWS (`stopped` | `starting` | `ready`)
-    let awsStatus = 'stopped';
-    const pageTextSample = this.cleanText(document.body?.innerText || '').slice(0, 1500);
-    const hasActiveTimer = /\b\d{2}:\d{2}\b/.test(pageTextSample) && !/\b00:00\b/.test(pageTextSample);
-
+    // Deteksi status environment AWS (`stopped` [AWS 🔴 / 00:00] | `starting` [AWS 🟡 / spinner] | `ready` [AWS 🟢])
+    let dotColorState = null; // 'red' | 'yellow' | 'green' | null
     if (awsConsoleEl) {
-      const parentBar = awsConsoleEl.parentElement || awsConsoleEl;
-      const barHtml = (parentBar.innerHTML || '').toLowerCase();
-      const dotEl = parentBar.querySelector('span, i, .circle, .dot, .led, [class*="status"]');
-      const dotStyle = dotEl ? (dotEl.getAttribute('style') || '') + ' ' + (dotEl.className || '') : '';
-      const computedDotColor = dotEl
-        ? (dotEl.ownerDocument?.defaultView || window).getComputedStyle(dotEl).backgroundColor ||
-          (dotEl.ownerDocument?.defaultView || window).getComputedStyle(dotEl).color ||
-          ''
-        : '';
-      const combinedIndicator = `${barHtml} ${dotStyle} ${computedDotColor}`.toLowerCase();
+      const awsScope = awsConsoleEl.parentElement || awsConsoleEl;
+      const dotCandidates = [
+        awsConsoleEl,
+        ...Array.from(awsScope.querySelectorAll('span, i, svg, circle, path, div'))
+      ].filter((el) => this.isVisible(el) && el.getBoundingClientRect().width <= 45);
 
-      if (
-        /\b(green|ready|#28a745|#008000|#10b981|#22c55e|rgb\(\s*(?:0|16|34|40)\s*,\s*(?:128|167|185|197))\b/i.test(
-          combinedIndicator
-        )
-      ) {
-        awsStatus = 'ready';
-      } else if (
-        /\b(yellow|orange|starting|provisioning|#ffc107|#f59e0b|#eab308|fa-spin|spinner|rgb\(\s*(?:234|245|255)\s*,\s*(?:158|179|193|204))\b/i.test(
-          combinedIndicator
-        ) ||
-        hasActiveTimer
-      ) {
-        awsStatus = 'starting';
+      const parseRgbColor = (cssVal) => {
+        const m = String(cssVal || '').match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)/i);
+        if (!m) return null;
+        const a = m[4] !== undefined ? Number(m[4]) : 1;
+        if (a < 0.2) return null;
+        return { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]) };
+      };
+
+      for (const dEl of dotCandidates) {
+        const meta = `${dEl.className || ''} ${dEl.getAttribute('style') || ''} ${dEl.getAttribute('fill') || ''}`.toLowerCase();
+        if (/\b(green|ready|#28a745|#008000|#10b981|#22c55e|#5cb85c)\b/.test(meta)) {
+          dotColorState = 'green';
+          break;
+        }
+        if (/\b(red|danger|stopped|#dc3545|#ff0000|#ef4444|#d9534f|#c00)\b/.test(meta)) {
+          dotColorState = 'red';
+          break;
+        }
+        if (/\b(yellow|orange|warning|starting|#ffc107|#f59e0b|#eab308|#f0ad4e)\b/.test(meta)) {
+          dotColorState = 'yellow';
+          break;
+        }
+
+        const win = dEl.ownerDocument?.defaultView || window;
+        const st = win.getComputedStyle(dEl);
+        // Hanya periksa warna teks (`st.color`) jika elemen merupakan bulatan/ikon kecil (bukan teks huruf "AWS")
+        const dTxt = this.cleanText(dEl.innerText || dEl.textContent || '');
+        const isSmallDotOrSymbol = !/[a-zA-Z]/.test(dTxt) || dEl.getBoundingClientRect().width <= 20;
+        const colorProps = [
+          st.backgroundColor,
+          st.fill,
+          ...(isSmallDotOrSymbol ? [st.color, st.borderTopColor] : [])
+        ];
+
+        for (const cProp of colorProps) {
+          const rgb = parseRgbColor(cProp);
+          if (!rgb) continue;
+          if (rgb.g >= 115 && rgb.g > rgb.r * 1.2 && rgb.g > rgb.b * 1.2) {
+            dotColorState = 'green';
+            break;
+          }
+          if (rgb.r >= 165 && rgb.g <= 85 && rgb.b <= 85) {
+            dotColorState = 'red';
+            break;
+          }
+          if (rgb.r >= 175 && rgb.g >= 110 && rgb.b <= 85) {
+            dotColorState = 'yellow';
+            break;
+          }
+        }
+        if (dotColorState) break;
       }
-    } else if (hasActiveTimer) {
+    }
+
+    // Cek apakah tombol `Start Lab` sedang menampilkan ikon loading/spinner yang TERLIHAT (`isVisible`)
+    let hasVisibleStartSpinner = false;
+    if (startLabEl) {
+      const spinScope = startLabEl.parentElement || startLabEl;
+      const iconNodes = Array.from(spinScope.querySelectorAll('i, span, svg, img'));
+      hasVisibleStartSpinner = iconNodes.some((ic) => {
+        if (!this.isVisible(ic)) return false;
+        const cls = `${ic.className || ''} ${ic.getAttribute('src') || ''}`.toLowerCase();
+        if (/\b(fa-spin|fa-spinner|fa-circle-o-notch|glyphicon-refresh|spinner|loading)\b/.test(cls)) {
+          return true;
+        }
+        const win = ic.ownerDocument?.defaultView || window;
+        const anim = win.getComputedStyle(ic).animationName || '';
+        return Boolean(anim && anim !== 'none');
+      });
+    }
+
+    // Cek timer pada bar atas (`rect.top < 110`)
+    const toolbarTimerTexts = clickables
+      .filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.top < 110 && r.width <= 120 && r.height <= 50;
+      })
+      .map((el) => this.cleanText(el.innerText || el.textContent || ''))
+      .filter((t) => /^\d{1,2}:\d{2}(?::\d{2})?$/.test(t));
+
+    const isZeroTimer = toolbarTimerTexts.some((t) => /^0+:00(?::00)?$/.test(t));
+    const hasNonZeroTimer = toolbarTimerTexts.some((t) => !/^0+:00(?::00)?$/.test(t));
+
+    let awsStatus = 'stopped';
+    if (dotColorState === 'green') {
+      awsStatus = 'ready';
+    } else if (dotColorState === 'red') {
+      awsStatus = hasVisibleStartSpinner ? 'starting' : 'stopped';
+    } else if (dotColorState === 'yellow' || hasVisibleStartSpinner) {
+      awsStatus = 'starting';
+    } else if (isZeroTimer) {
+      awsStatus = 'stopped';
+    } else if (hasNonZeroTimer) {
       awsStatus = 'starting';
     }
 
