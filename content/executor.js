@@ -190,13 +190,22 @@ const LMSExecutor = {
     }
 
     // Untuk Articulate Storyline 360 / SVG Canvas player:
-    // Pastikan elemen teratas pada koordinat (clientX, clientY) seperti <svg><path> / .event-layer / .acc-element juga menerima event klik!
+    // 1. Jika di dalam el ada .event-layer / svg path / svg rect, kirim event pointer & mouse ke sana (tanpa menduplikasi click yang bubble)
+    if (el.querySelector) {
+      const svgTarget = el.querySelector('.event-layer, svg path, svg rect, svg');
+      if (svgTarget && svgTarget !== el) {
+        dispatchPointerAndMouse(svgTarget);
+      }
+    }
+
+    // 2. Pastikan elemen teratas pada koordinat (clientX, clientY) yang BUKAN anak dari el serta pasangan .acc-element / .slide-object menerima event klik!
     try {
       const pointEl = doc.elementFromPoint ? doc.elementFromPoint(clientX, clientY) : null;
       if (
         pointEl &&
         pointEl !== el &&
         pointEl !== linkedInput &&
+        !el.contains(pointEl) &&
         !(pointEl.closest && pointEl.closest('#lms-autopilot-hud-host'))
       ) {
         dispatchPointerAndMouse(pointEl);
@@ -207,34 +216,98 @@ const LMSExecutor = {
           pointEl.dispatchEvent(new MseEv('click', { ...eventInit, buttons: 0 }));
         }
       }
+
+      // Jika berada di dalam Storyline player, picu juga pasangan .acc-element / .slide-object yang bertumpuk pada koordinat yang sama
+      if (el.closest && el.closest('#preso, #slide, .slide-container, .frame-wrap')) {
+        const overlays = Array.from(
+          doc.querySelectorAll('.acc-element, [data-acc-text], .slide-object, button')
+        ).filter((cand) => {
+          if (cand === el || cand === pointEl || cand.contains(el) || el.contains(cand)) return false;
+          const r = cand.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) return false;
+          const cx = r.left + r.width / 2;
+          const cy = r.top + r.height / 2;
+          return Math.abs(cx - clientX) <= 22 && Math.abs(cy - clientY) <= 18;
+        });
+        for (const ov of overlays.slice(0, 2)) {
+          dispatchPointerAndMouse(ov);
+          if (typeof ov.click === 'function') ov.click();
+        }
+      }
     } catch {}
 
     return true;
   },
 
   /**
-   * Klik elemen navigasi / tautan modul (`<a href="...">` seperti pada daftar modul Canvas atau tombol `Take the Quiz` / `Next ›`)
-   * dan pastikan browser benar-benar berpindah ke halaman tujuan jika `href` merupakan URL halaman valid.
+   * Klik elemen navigasi / tautan modul (`<a href="...">` seperti pada daftar modul Canvas, tombol `Load <Nama Lab> in a new window`, atau `Next ›`)
+   * Mengembalikan `{ clicked: true, openedNewTab: boolean }`.
    */
   async navigateOrClick(el, highlightColor = '#06b6d4') {
-    if (!el) return false;
+    if (!el) return { clicked: false, openedNewTab: false };
+
+    const overrideHref = (el.getAttribute && el.getAttribute('data-lms-override-href')) || '';
+    if (overrideHref) {
+      this.highlightElement(el, highlightColor, 850);
+      if (window.LMSScanner && typeof window.LMSScanner.markModuleUrlVisited === 'function') {
+        window.LMSScanner.markModuleUrlVisited(overrideHref);
+      }
+      await this.sleep(180);
+      try {
+        window.location.assign(overrideHref);
+      } catch {}
+      return { clicked: true, openedNewTab: false };
+    }
+
     const anchor = el.tagName === 'A' ? el : el.closest ? el.closest('a[href]') : null;
     const targetHref = anchor ? (anchor.href || anchor.getAttribute('href') || '').trim() : '';
-    const isBlankTarget = anchor && anchor.getAttribute('target') === '_blank';
+    const elText = window.LMSScanner ? window.LMSScanner.getElementText(anchor || el) : '';
+    const parentForm = el.closest ? el.closest('form[target="_blank"]') : null;
+    const isBlankTarget =
+      Boolean(anchor && anchor.getAttribute('target') === '_blank') ||
+      Boolean(parentForm) ||
+      /\bin\s+a\s+new\s+(?:window|tab)\b/i.test(elText);
     const prevUrl = window.location.href;
 
     if (targetHref && window.LMSScanner && typeof window.LMSScanner.markModuleUrlVisited === 'function') {
       window.LMSScanner.markModuleUrlVisited(targetHref);
     }
 
+    // Jika tautan adalah peluncur Lab di tab baru (<a target="_blank" href="http...">),
+    // gunakan chrome.tabs.create via Service Worker agar TIDAK PERNAH diblokir oleh popup blocker Chrome!
+    if (
+      anchor &&
+      isBlankTarget &&
+      anchor.href &&
+      /^https?:\/\//i.test(anchor.href) &&
+      typeof chrome !== 'undefined' &&
+      chrome.runtime &&
+      chrome.runtime.sendMessage
+    ) {
+      await this.scrollIntoViewSafe(anchor);
+      this.highlightElement(anchor, highlightColor, 850);
+      await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: 'OPEN_NEW_TAB', payload: { url: anchor.href } }, () => {
+          void chrome.runtime.lastError;
+          resolve();
+        });
+      });
+      await this.sleep(350);
+      return { clicked: true, openedNewTab: true };
+    }
+
     await this.clickElement(anchor || el, highlightColor);
+
+    if (isBlankTarget) {
+      await this.sleep(450);
+      return { clicked: true, openedNewTab: true };
+    }
 
     // Jika elemen memiliki tautan <a href="..."> yang valid (bukan '#' atau 'javascript:') dan bukan tab baru,
     // pastikan navigasi halaman benar-benar terjadi!
     if (
       anchor &&
       targetHref &&
-      !isBlankTarget &&
       !targetHref.startsWith('#') &&
       !/^javascript:/i.test(targetHref)
     ) {
@@ -246,7 +319,10 @@ const LMSExecutor = {
       }
     }
 
-    return true;
+    // Cek juga apakah klik barusan membuka tab baru via window.open() (menyebabkan tab ini menjadi hidden)
+    await this.sleep(250);
+    const openedViaWindowOpen = document.visibilityState === 'hidden';
+    return { clicked: true, openedNewTab: openedViaWindowOpen };
   },
 
   /**

@@ -65,6 +65,14 @@ async function handleMessage(message) {
       );
     }
 
+    case 'OPEN_NEW_TAB': {
+      if (payload?.url && chrome.tabs && chrome.tabs.create) {
+        const tab = await chrome.tabs.create({ url: payload.url, active: true });
+        return { tabId: tab?.id || null };
+      }
+      return { tabId: null };
+    }
+
     default:
       throw new Error(`Tipe pesan tidak dikenali: ${type}`);
   }
